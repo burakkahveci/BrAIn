@@ -1,25 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { uniqueBaseName } from "../app/analysis-helpers.js";
 
-test("validates batch unique base name generation logic", async () => {
-  function safeFileBase(fileName) {
-    return (
-      fileName
-        .replace(/\.[^.]+$/, "")
-        .replace(/[^a-zA-Z0-9_-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "brain-analysis"
-    );
-  }
-
-  function uniqueBaseName(fileName, index, allNames) {
-    const base = safeFileBase(fileName);
-    const previousCount = allNames
-      .slice(0, index)
-      .filter((name) => safeFileBase(name) === base).length;
-    return previousCount > 0 ? `${base}-${previousCount + 1}` : base;
-  }
-
+test("validates the application's batch unique base name generation logic", () => {
   const files = ["organoid.png", "organoid.png", "organoid.png", "rosette.tif"];
   const uniqueBases = files.map((f, i) => uniqueBaseName(f, i, files));
 

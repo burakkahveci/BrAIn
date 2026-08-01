@@ -1,6 +1,6 @@
 # BrAIn browser validation protocol
 
-Version: 1.0  
+Version: 1.0
 Status: protocol ready; independent multi-laboratory validation is not yet complete
 
 ## Purpose

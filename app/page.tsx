@@ -6,6 +6,11 @@ import * as ort from "onnxruntime-web";
 import { strToU8, zipSync } from "fflate";
 import * as UTIF from "utif";
 import { publicAsset } from "./base-path";
+import {
+  csvCell,
+  tiffDecodeNotes,
+  uniqueBaseName,
+} from "./analysis-helpers";
 
 const IMAGE_SIZE = 256;
 const CLASSIFICATION_IMAGE_SIZE = 550;
@@ -478,7 +483,7 @@ async function prepareImageFile(file: File): Promise<PreparedImageFile> {
       if (!ifds || !ifds.length) {
         throw new Error("The TIFF file does not contain a readable image header.");
       }
-      UTIF.decodeImage(buffer, ifds[0], ifds);
+      UTIF.decodeImage(buffer, ifds[0]);
       const rgba = UTIF.toRGBA8(ifds[0]);
       if (!rgba || !ifds[0].width || !ifds[0].height) {
         throw new Error("The TIFF image color format or dimensions could not be decoded.");
@@ -494,8 +499,7 @@ async function prepareImageFile(file: File): Promise<PreparedImageFile> {
         0,
       );
       objectUrl = URL.createObjectURL(await canvasToBlob(canvas));
-      notes.push("TIFF decoded locally in the browser.");
-      if (ifds.length > 1) notes.push(`Multi-page TIFF: page 1 of ${ifds.length} was analyzed.`);
+      notes.push(...tiffDecodeNotes(ifds.length));
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unrecognized or unsupported TIFF encoding.";
       throw new Error(`TIFF decoding error: ${msg}`);
@@ -577,27 +581,6 @@ function makeAnalysisReport(input: {
     interpretation_note:
       "Automated output requires visual quality control and is intended for research use.",
   };
-}
-
-function safeFileBase(fileName: string) {
-  return (
-    fileName
-      .replace(/\.[^.]+$/, "")
-      .replace(/[^a-zA-Z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "brain-analysis"
-  );
-}
-
-function uniqueBaseName(fileName: string, index: number, allNames: string[]) {
-  const base = safeFileBase(fileName);
-  const previousCount = allNames
-    .slice(0, index)
-    .filter((name) => safeFileBase(name) === base).length;
-  return previousCount > 0 ? `${base}-${previousCount + 1}` : base;
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
 async function loadJson<T>(path: string): Promise<T> {

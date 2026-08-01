@@ -211,7 +211,7 @@ test("supports TIFF, quality review, batch exports and reproducible reports", as
 
   assert.match(page, /import \* as UTIF from "utif"/);
   assert.match(page, /image\/tiff/);
-  assert.match(page, /Multi-page TIFF: page 1/);
+  assert.match(page, /tiffDecodeNotes/);
   assert.match(page, /Image quality review/);
   assert.match(page, /Batch analysis/);
   assert.match(page, /multiple/);

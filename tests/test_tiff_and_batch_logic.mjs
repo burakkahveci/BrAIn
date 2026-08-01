@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import UTIF from "utif";
 import { strToU8, zipSync, unzipSync } from "fflate";
+import {
+  tiffDecodeNotes,
+  uniqueBaseName,
+} from "../app/analysis-helpers.js";
 
 const utif = UTIF.default || UTIF;
 
-test("decodes single-page and multi-page TIFF images via UTIF", () => {
+test("decodes a generated single-page TIFF image via UTIF", () => {
   const width = 64;
   const height = 64;
   const rgba = new Uint8Array(width * height * 4);
@@ -34,24 +38,15 @@ test("decodes single-page and multi-page TIFF images via UTIF", () => {
   assert.equal(decodedRgba[2], 180);
 });
 
+test("records the application's first-page policy for multi-page TIFF images", () => {
+  assert.deepEqual(tiffDecodeNotes(1), ["TIFF decoded locally in the browser."]);
+  assert.deepEqual(tiffDecodeNotes(3), [
+    "TIFF decoded locally in the browser.",
+    "Multi-page TIFF: page 1 of 3 was analyzed.",
+  ]);
+});
+
 test("generates valid ZIP export with deduplicated filenames and error reports", () => {
-  function safeFileBase(fileName) {
-    return (
-      fileName
-        .replace(/\.[^.]+$/, "")
-        .replace(/[^a-zA-Z0-9_-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "brain-analysis"
-    );
-  }
-
-  function uniqueBaseName(fileName, index, allNames) {
-    const base = safeFileBase(fileName);
-    const previousCount = allNames
-      .slice(0, index)
-      .filter((name) => safeFileBase(name) === base).length;
-    return previousCount > 0 ? `${base}-${previousCount + 1}` : base;
-  }
-
   const items = [
     {
       fileName: "sample.tiff",
