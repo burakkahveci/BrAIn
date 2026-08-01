@@ -233,15 +233,36 @@ let cachedBuddingClassificationLoadMilliseconds = 0;
 let cachedRosetteSession: ort.InferenceSession | null = null;
 let cachedRosetteLoadMilliseconds = 0;
 
-type ValidationResult = {
+type SegmentationRegionMeasurement = {
+  regionId: number;
+  areaPixels: number;
+  perimeterPixels: number;
+  feretPixels: number;
+  axisMajorPixels: number;
+  roundness: number;
+  circularity: number;
+};
+
+type SegmentationMorphology = {
+  originalWidth: number;
+  originalHeight: number;
+  regionCount: number;
+  meanAreaPixels: number;
+  meanFeretPixels: number;
+  regions: SegmentationRegionMeasurement[];
+};
+
+type BoAnalysisResult = {
   modelLoadSeconds: number;
   inferenceSeconds: number;
-  maxInputError: number;
-  maxProbabilityError: number;
-  disagreementPixels: number;
-  dice: number;
+  maxInputError: number | null;
+  maxProbabilityError: number | null;
+  disagreementPixels: number | null;
+  dice: number | null;
   foregroundPixels: number;
   usedCachedModel: boolean;
+  isReference: boolean;
+  morphology: SegmentationMorphology;
 };
 
 type ClassificationResult = {
@@ -257,21 +278,6 @@ type ClassificationResult = {
   maxProbabilityError: number | null;
 };
 
-type EbRegionMeasurement = {
-  regionId: number;
-  areaPixels: number;
-  feretPixels: number;
-};
-
-type EbMorphology = {
-  originalWidth: number;
-  originalHeight: number;
-  regionCount: number;
-  meanAreaPixels: number;
-  meanFeretPixels: number;
-  regions: EbRegionMeasurement[];
-};
-
 type EbAnalysisResult = {
   modelLoadSeconds: number;
   inferenceSeconds: number;
@@ -283,7 +289,7 @@ type EbAnalysisResult = {
     disagreementPixels: number;
     dice: number;
   } | null;
-  morphology: EbMorphology;
+  morphology: SegmentationMorphology;
 };
 
 type RosetteDetection = {
@@ -497,26 +503,6 @@ async function getRosetteSession() {
   return { session: cachedRosetteSession, usedCachedModel: false };
 }
 
-function drawBinaryMask(canvas: HTMLCanvasElement, prediction: Float32Array) {
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("The result canvas is unavailable.");
-
-  canvas.width = IMAGE_SIZE;
-  canvas.height = IMAGE_SIZE;
-  const binaryMask = context.createImageData(IMAGE_SIZE, IMAGE_SIZE);
-
-  for (let index = 0; index < prediction.length; index += 1) {
-    const value = prediction[index] > 0.5 ? 255 : 0;
-    const pixel = index * 4;
-    binaryMask.data[pixel] = value;
-    binaryMask.data[pixel + 1] = value;
-    binaryMask.data[pixel + 2] = value;
-    binaryMask.data[pixel + 3] = 255;
-  }
-
-  context.putImageData(binaryMask, 0, 0);
-}
-
 type Point = { x: number; y: number };
 
 function resizeGrayBilinear(
@@ -556,14 +542,17 @@ function resizeGrayBilinear(
   return resized;
 }
 
-function prepareUserEbInput(image: HTMLImageElement, canvas: HTMLCanvasElement) {
+function prepareUserSegmentationInput(
+  image: HTMLImageElement,
+  canvas: HTMLCanvasElement,
+) {
   const sourceWidth = image.naturalWidth;
   const sourceHeight = image.naturalHeight;
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = sourceWidth;
   sourceCanvas.height = sourceHeight;
   const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
-  if (!sourceContext) throw new Error("The selected EB image could not be prepared.");
+  if (!sourceContext) throw new Error("The selected image could not be prepared.");
   sourceContext.drawImage(image, 0, 0);
   const rgba = sourceContext.getImageData(0, 0, sourceWidth, sourceHeight).data;
   const grayscale = new Uint8Array(sourceWidth * sourceHeight);
@@ -586,7 +575,7 @@ function prepareUserEbInput(image: HTMLImageElement, canvas: HTMLCanvasElement) 
   canvas.width = IMAGE_SIZE;
   canvas.height = IMAGE_SIZE;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("The EB model input could not be displayed.");
+  if (!context) throw new Error("The model input could not be displayed.");
   const imageData = context.createImageData(IMAGE_SIZE, IMAGE_SIZE);
   const input = new Float32Array(IMAGE_SIZE * IMAGE_SIZE);
   for (let index = 0; index < resized.length; index += 1) {
@@ -785,10 +774,86 @@ function regionFeretDiameter(
   return Math.sqrt(maximumSquaredDistance);
 }
 
-function analyzeEbMask(mask: Uint8Array, width: number, height: number): EbMorphology {
+function regionPerimeter(
+  queue: Int32Array,
+  length: number,
+  imageWidth: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+) {
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  const region = new Uint8Array(width * height);
+  for (let index = 0; index < length; index += 1) {
+    const source = queue[index];
+    const sourceY = Math.floor(source / imageWidth);
+    const sourceX = source - sourceY * imageWidth;
+    region[(sourceY - minY) * width + sourceX - minX] = 1;
+  }
+
+  const border = new Uint8Array(region.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      if (!region[index]) continue;
+      const eroded =
+        x > 0 &&
+        x < width - 1 &&
+        y > 0 &&
+        y < height - 1 &&
+        region[index - 1] &&
+        region[index + 1] &&
+        region[index - width] &&
+        region[index + width];
+      border[index] = eroded ? 0 : 1;
+    }
+  }
+
+  const weights = new Map<number, number>([
+    [5, 1],
+    [7, 1],
+    [15, 1],
+    [17, 1],
+    [25, 1],
+    [27, 1],
+    [21, Math.SQRT2],
+    [33, Math.SQRT2],
+    [13, (1 + Math.SQRT2) / 2],
+    [23, (1 + Math.SQRT2) / 2],
+  ]);
+  let perimeter = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      if (!border[index]) continue;
+      let code = 1;
+      for (let deltaY = -1; deltaY <= 1; deltaY += 1) {
+        const neighborY = y + deltaY;
+        if (neighborY < 0 || neighborY >= height) continue;
+        for (let deltaX = -1; deltaX <= 1; deltaX += 1) {
+          if (deltaX === 0 && deltaY === 0) continue;
+          const neighborX = x + deltaX;
+          if (neighborX < 0 || neighborX >= width) continue;
+          if (!border[neighborY * width + neighborX]) continue;
+          code += deltaX === 0 || deltaY === 0 ? 2 : 10;
+        }
+      }
+      perimeter += weights.get(code) ?? 0;
+    }
+  }
+  return perimeter;
+}
+
+function analyzeSegmentationMask(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+): SegmentationMorphology {
   const visited = new Uint8Array(mask.length);
   const queue = new Int32Array(mask.length);
-  const regions: EbRegionMeasurement[] = [];
+  const regions: SegmentationRegionMeasurement[] = [];
   const neighborOffsets = [-1, 0, 1];
 
   for (let start = 0; start < mask.length; start += 1) {
@@ -800,6 +865,11 @@ function analyzeEbMask(mask: Uint8Array, width: number, height: number): EbMorph
     let maxX = -1;
     let minY = height;
     let maxY = -1;
+    let sumX = 0;
+    let sumY = 0;
+    let sumXX = 0;
+    let sumYY = 0;
+    let sumXY = 0;
     const rowExtents = new Map<number, [number, number]>();
     const columnExtents = new Map<number, [number, number]>();
     queue[tail] = start;
@@ -816,6 +886,11 @@ function analyzeEbMask(mask: Uint8Array, width: number, height: number): EbMorph
       maxX = Math.max(maxX, x);
       minY = Math.min(minY, y);
       maxY = Math.max(maxY, y);
+      sumX += x;
+      sumY += y;
+      sumXX += x * x;
+      sumYY += y * y;
+      sumXY += x * y;
       const row = rowExtents.get(y);
       rowExtents.set(y, row ? [Math.min(row[0], x), Math.max(row[1], x)] : [x, x]);
       const column = columnExtents.get(x);
@@ -841,17 +916,46 @@ function analyzeEbMask(mask: Uint8Array, width: number, height: number): EbMorph
       }
     }
 
+    const meanX = sumX / areaPixels;
+    const meanY = sumY / areaPixels;
+    const varianceX = Math.max(0, sumXX / areaPixels - meanX * meanX);
+    const varianceY = Math.max(0, sumYY / areaPixels - meanY * meanY);
+    const covariance = sumXY / areaPixels - meanX * meanY;
+    const discriminant = Math.sqrt(
+      (varianceX - varianceY) ** 2 + 4 * covariance ** 2,
+    );
+    const axisMajorPixels = 4 * Math.sqrt(Math.max(0, (varianceX + varianceY + discriminant) / 2));
+    const perimeterPixels = regionPerimeter(
+      queue,
+      tail,
+      width,
+      minX,
+      maxX,
+      minY,
+      maxY,
+    );
+    const feretPixels = regionFeretDiameter(
+      rowExtents,
+      columnExtents,
+      minX,
+      maxX,
+      minY,
+      maxY,
+    );
     regions.push({
       regionId: regions.length + 1,
       areaPixels,
-      feretPixels: regionFeretDiameter(
-        rowExtents,
-        columnExtents,
-        minX,
-        maxX,
-        minY,
-        maxY,
-      ),
+      perimeterPixels,
+      feretPixels,
+      axisMajorPixels,
+      roundness:
+        axisMajorPixels > 0
+          ? (4 * areaPixels) / (Math.PI * axisMajorPixels ** 2)
+          : 0,
+      circularity:
+        perimeterPixels > 0
+          ? (4 * Math.PI * areaPixels) / perimeterPixels ** 2
+          : 0,
     });
   }
 
@@ -1054,7 +1158,7 @@ export default function Home() {
   const rosetteOutputCanvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState("Ready for the reference test");
   const [isRunning, setIsRunning] = useState(false);
-  const [result, setResult] = useState<ValidationResult | null>(null);
+  const [result, setResult] = useState<BoAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pixelSizeInput, setPixelSizeInput] = useState("1.0");
   const [activeModule, setActiveModule] = useState<ActiveModule>("segmentation");
@@ -1063,6 +1167,9 @@ export default function Home() {
   const [segmentationMode, setSegmentationMode] = useState<SegmentationMode>("bo");
   const [boReferenceId, setBoReferenceId] =
     useState<(typeof BO_REFERENCES)[number]["id"]>(BO_REFERENCES[0].id);
+  const [boImagePath, setBoImagePath] = useState(BO_REFERENCES[0].imagePath);
+  const [boFileName, setBoFileName] = useState<string>(BO_REFERENCES[0].id);
+  const [boUsesReference, setBoUsesReference] = useState(true);
   const [ebReferenceId, setEbReferenceId] = useState(EB_REFERENCES[0].id);
   const [ebImagePath, setEbImagePath] = useState(EB_REFERENCES[0].imagePath);
   const [ebFileName, setEbFileName] = useState(EB_REFERENCES[0].displayName);
@@ -1126,20 +1233,39 @@ export default function Home() {
   const hasValidPixelSize = Number.isFinite(pixelSize) && pixelSize > 0;
   const showMorphology = Boolean(result && hasValidPixelSize);
   const showEbMorphology = Boolean(ebResult && hasValidPixelSize);
+  const primaryBoRegion = result
+    ? [...result.morphology.regions].sort(
+        (left, right) => right.areaPixels - left.areaPixels,
+      )[0] ?? null
+    : null;
 
-  const runReferenceTest = async () => {
+  const runBoAnalysis = async () => {
     if (isRunning) return;
     setIsRunning(true);
     setError(null);
     setResult(null);
 
     try {
-      setStatus("Loading the reference image…");
+      setStatus(boUsesReference ? "Loading the reference image…" : "Preparing your image…");
       const [image, expectedInput, expectedOutput] = await Promise.all([
-        loadImage(selectedBoReference.imagePath),
-        loadFloat32(selectedBoReference.expectedInputPath),
-        loadFloat32(selectedBoReference.expectedOutputPath),
+        loadImage(boImagePath),
+        boUsesReference
+          ? loadFloat32(selectedBoReference.expectedInputPath)
+          : Promise.resolve(null),
+        boUsesReference
+          ? loadFloat32(selectedBoReference.expectedOutputPath)
+          : Promise.resolve(null),
       ]);
+
+      if (
+        image.naturalWidth > 8192 ||
+        image.naturalHeight > 8192 ||
+        image.naturalWidth * image.naturalHeight > 25_000_000
+      ) {
+        throw new Error(
+          "This image is too large for safe in-browser morphology analysis. Use an image up to 8192 px per side and 25 megapixels.",
+        );
+      }
 
       const inputCanvas = inputCanvasRef.current;
       const outputCanvas = outputCanvasRef.current;
@@ -1147,22 +1273,28 @@ export default function Home() {
         throw new Error("The image canvases are unavailable.");
       }
 
-      inputCanvas.width = IMAGE_SIZE;
-      inputCanvas.height = IMAGE_SIZE;
-      const inputContext = inputCanvas.getContext("2d", {
-        willReadFrequently: true,
-      });
-      if (!inputContext) throw new Error("The input canvas is unavailable.");
-      inputContext.drawImage(image, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
-      const rgba = inputContext.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE).data;
-      const input = new Float32Array(IMAGE_SIZE * IMAGE_SIZE);
-      let maxInputError = 0;
-      for (let index = 0; index < input.length; index += 1) {
-        input[index] = rgba[index * 4] / 255;
-        maxInputError = Math.max(
-          maxInputError,
-          Math.abs(input[index] - expectedInput[index]),
-        );
+      let input: Float32Array;
+      let maxInputError: number | null = null;
+      if (expectedInput) {
+        inputCanvas.width = IMAGE_SIZE;
+        inputCanvas.height = IMAGE_SIZE;
+        const inputContext = inputCanvas.getContext("2d", {
+          willReadFrequently: true,
+        });
+        if (!inputContext) throw new Error("The input canvas is unavailable.");
+        inputContext.drawImage(image, 0, 0, IMAGE_SIZE, IMAGE_SIZE);
+        const rgba = inputContext.getImageData(0, 0, IMAGE_SIZE, IMAGE_SIZE).data;
+        input = new Float32Array(IMAGE_SIZE * IMAGE_SIZE);
+        maxInputError = 0;
+        for (let index = 0; index < input.length; index += 1) {
+          input[index] = rgba[index * 4] / 255;
+          maxInputError = Math.max(
+            maxInputError,
+            Math.abs(input[index] - expectedInput[index]),
+          );
+        }
+      } else {
+        input = prepareUserSegmentationInput(image, inputCanvas);
       }
 
       setStatus(
@@ -1179,27 +1311,45 @@ export default function Home() {
       const inferenceSeconds = (nowMilliseconds() - inferenceStarted) / 1000;
       const prediction = outputs[outputName].data as Float32Array;
 
-      let maxProbabilityError = 0;
-      let disagreementPixels = 0;
+      let maxProbabilityError: number | null = null;
+      let disagreementPixels: number | null = null;
+      let dice: number | null = null;
       let predictedForeground = 0;
-      let expectedForeground = 0;
-      let intersection = 0;
-
       for (let index = 0; index < prediction.length; index += 1) {
-        maxProbabilityError = Math.max(
-          maxProbabilityError,
-          Math.abs(prediction[index] - expectedOutput[index]),
-        );
-        const predicted = prediction[index] > 0.5;
-        const expected = expectedOutput[index] > 0.5;
-        if (predicted !== expected) disagreementPixels += 1;
-        if (predicted) predictedForeground += 1;
-        if (expected) expectedForeground += 1;
-        if (predicted && expected) intersection += 1;
+        if (prediction[index] > 0.5) predictedForeground += 1;
+      }
+      if (expectedOutput) {
+        maxProbabilityError = 0;
+        disagreementPixels = 0;
+        let expectedForeground = 0;
+        let intersection = 0;
+        for (let index = 0; index < prediction.length; index += 1) {
+          maxProbabilityError = Math.max(
+            maxProbabilityError,
+            Math.abs(prediction[index] - expectedOutput[index]),
+          );
+          const predicted = prediction[index] > 0.5;
+          const expected = expectedOutput[index] > 0.5;
+          if (predicted !== expected) disagreementPixels += 1;
+          if (expected) expectedForeground += 1;
+          if (predicted && expected) intersection += 1;
+        }
+        const denominator = predictedForeground + expectedForeground;
+        dice = denominator === 0 ? 1 : (2 * intersection) / denominator;
       }
 
-      drawBinaryMask(outputCanvas, prediction);
-      const dice = (2 * intersection) / (predictedForeground + expectedForeground);
+      setStatus("Measuring organoid morphology…");
+      const mask = resizePredictionToMask(
+        prediction,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
+      drawBinaryMaskData(outputCanvas, mask, image.naturalWidth, image.naturalHeight);
+      const morphology = analyzeSegmentationMask(
+        mask,
+        image.naturalWidth,
+        image.naturalHeight,
+      );
       setResult({
         modelLoadSeconds: cachedLoadMilliseconds / 1000,
         inferenceSeconds,
@@ -1209,9 +1359,17 @@ export default function Home() {
         dice,
         foregroundPixels: predictedForeground,
         usedCachedModel,
+        isReference: boUsesReference,
+        morphology,
       });
       setStatus(
-        disagreementPixels === 0 ? "Validation passed" : "Validation needs review",
+        boUsesReference
+          ? disagreementPixels === 0
+            ? "Desktop BO mask confirmed"
+            : "BO reference result needs review"
+          : morphology.regionCount
+            ? `Analysis complete · ${morphology.regionCount} organoid region${morphology.regionCount === 1 ? "" : "s"}`
+            : "Analysis complete · no organoid region detected",
       );
     } catch (caught) {
       const message =
@@ -1224,10 +1382,80 @@ export default function Home() {
   };
 
   const selectBoReference = (referenceId: (typeof BO_REFERENCES)[number]["id"]) => {
+    const reference =
+      BO_REFERENCES.find((candidate) => candidate.id === referenceId) ?? BO_REFERENCES[0];
+    setBoImagePath((previousPath) => {
+      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+      return reference.imagePath;
+    });
     setBoReferenceId(referenceId);
+    setBoFileName(reference.id);
+    setBoUsesReference(true);
     setResult(null);
     setError(null);
     setStatus("Ready for the selected reference test");
+  };
+
+  const selectBoImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBoImagePath((previousPath) => {
+      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+      return URL.createObjectURL(file);
+    });
+    setBoFileName(file.name);
+    setBoUsesReference(false);
+    setResult(null);
+    setError(null);
+    setStatus("Image ready for local BO analysis");
+  };
+
+  const useBoReference = () => selectBoReference(boReferenceId);
+
+  const boDownloadBase =
+    boFileName
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "brain-bo";
+
+  const downloadBoMask = () => {
+    const canvas = outputCanvasRef.current;
+    if (!canvas || !result) return;
+    canvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, `${boDownloadBase}-mask.png`);
+    }, "image/png");
+  };
+
+  const downloadBoMeasurements = () => {
+    if (!result || !hasValidPixelSize) return;
+    const escapeCsv = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const lines = [
+      "source_file,image_width_px,image_height_px,pixel_size_um_per_px,region_id,is_primary,area_px2,area_um2,perimeter_px,perimeter_um,feret_diameter_px,feret_diameter_um,axis_major_px,axis_major_um,roundness,circularity",
+      ...result.morphology.regions.map((region) =>
+        [
+          escapeCsv(boFileName),
+          result.morphology.originalWidth,
+          result.morphology.originalHeight,
+          pixelSize,
+          region.regionId,
+          region.regionId === primaryBoRegion?.regionId ? "true" : "false",
+          region.areaPixels,
+          region.areaPixels * pixelSize ** 2,
+          region.perimeterPixels,
+          region.perimeterPixels * pixelSize,
+          region.feretPixels,
+          region.feretPixels * pixelSize,
+          region.axisMajorPixels,
+          region.axisMajorPixels * pixelSize,
+          region.roundness,
+          region.circularity,
+        ].join(","),
+      ),
+    ];
+    downloadBlob(
+      new Blob([`\ufeff${lines.join("\n")}\n`], { type: "text/csv;charset=utf-8" }),
+      `${boDownloadBase}-measurements.csv`,
+    );
   };
 
   const selectEbReference = (referenceId: string) => {
@@ -1320,7 +1548,7 @@ export default function Home() {
           );
         }
       } else {
-        input = prepareUserEbInput(sourceImage, inputCanvas);
+        input = prepareUserSegmentationInput(sourceImage, inputCanvas);
       }
 
       setEbStatus(
@@ -1376,7 +1604,7 @@ export default function Home() {
         sourceImage.naturalWidth,
         sourceImage.naturalHeight,
       );
-      const morphology = analyzeEbMask(
+      const morphology = analyzeSegmentationMask(
         mask,
         sourceImage.naturalWidth,
         sourceImage.naturalHeight,
@@ -1634,6 +1862,34 @@ export default function Home() {
     } finally {
       setClassificationIsRunning(false);
     }
+  };
+
+  const classificationDownloadBase =
+    classificationFileName
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "brain-classification";
+
+  const downloadClassificationResult = () => {
+    if (!classificationResult) return;
+    const escapeCsv = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const lines = [
+      "source_file,task,predicted_class,target_class,target_probability,normal_probability,model_load_seconds,inference_seconds",
+      [
+        escapeCsv(classificationFileName),
+        classificationMode === "abnormal" ? "Abnormal-Normal" : "Budding-Normal",
+        classificationResult.predictedLabel,
+        classificationTargetLabel,
+        classificationResult.targetProbability,
+        classificationResult.normalProbability,
+        classificationResult.modelLoadSeconds,
+        classificationResult.inferenceSeconds,
+      ].join(","),
+    ];
+    downloadBlob(
+      new Blob([`\ufeff${lines.join("\n")}\n`], { type: "text/csv;charset=utf-8" }),
+      `${classificationDownloadBase}-classification.csv`,
+    );
   };
 
   const selectRosetteReference = (referenceId: string) => {
@@ -1955,8 +2211,8 @@ export default function Home() {
             <button
               key={reference.id}
               type="button"
-              className={`referenceTile ${boReferenceId === reference.id ? "active" : ""}`}
-              aria-pressed={boReferenceId === reference.id}
+              className={`referenceTile ${boUsesReference && boReferenceId === reference.id ? "active" : ""}`}
+              aria-pressed={boUsesReference && boReferenceId === reference.id}
               onClick={() => selectBoReference(reference.id)}
             >
               <img src={reference.imagePath} alt="" />
@@ -1969,28 +2225,40 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="workspace" aria-label="BrAIn reference validation">
+      <section className="workspace" aria-label="BrAIn BO segmentation analysis">
         <article className="visualCard">
           <div className="cardHeader">
             <div>
-              <p className="cardKicker">Reference sample</p>
-              <h2>{selectedBoReference.id}</h2>
+              <p className="cardKicker">
+                {boUsesReference ? "Released BO reference" : "User BO image"}
+              </p>
+              <h2>{boFileName}</h2>
             </div>
-            <span className="sampleMeta">256 × 256 px</span>
+            <span className="sampleMeta">
+              {result
+                ? `${result.morphology.originalWidth} × ${result.morphology.originalHeight} px mask`
+                : "256 × 256 model input"}
+            </span>
           </div>
 
           <div className="imageGrid">
             <figure>
               <div className="imageFrame">
-                <canvas ref={inputCanvasRef} aria-label="Reference brain organoid image" />
+                <canvas ref={inputCanvasRef} aria-label="Brain organoid model input image" />
                 {!result && (
                   <img
-                    src={selectedBoReference.imagePath}
-                    alt={`Reference brain organoid ${selectedBoReference.id}`}
+                    src={boImagePath}
+                    alt={boFileName}
                   />
                 )}
               </div>
-              <figcaption>Original image</figcaption>
+              <figcaption>
+                {result
+                  ? "Grayscale model input"
+                  : boUsesReference
+                    ? "Released reference image"
+                    : "Selected local image"}
+              </figcaption>
             </figure>
             <figure>
               <div className="imageFrame outputFrame">
@@ -2002,25 +2270,49 @@ export default function Home() {
               <figcaption>Binary segmentation mask</figcaption>
             </figure>
           </div>
+
+          <div className={`classificationFileActions ${boUsesReference ? "single" : ""}`}>
+            <label className="filePicker">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={selectBoImage}
+              />
+              <span>Choose your BO image</span>
+            </label>
+            {!boUsesReference && (
+              <button type="button" className="referenceButton" onClick={useBoReference}>
+                Use released reference
+              </button>
+            )}
+          </div>
         </article>
 
         <aside className="controlCard">
           <div>
-            <p className="cardKicker">One-click test</p>
-            <h2>Scientific equivalence</h2>
+            <p className="cardKicker">Device-local segmentation</p>
+            <h2>{boUsesReference ? "Scientific equivalence" : "Analyze your BO image"}</h2>
             <p className="controlCopy">
-              The first run loads 124 MB of model weights. Later runs reuse the model
-              already held in the browser.
+              The first run loads 124 MB of model weights. Your image is segmented and
+              measured on this device without being uploaded.
             </p>
           </div>
 
-          <button type="button" onClick={runReferenceTest} disabled={isRunning}>
-            <span>{isRunning ? "Running…" : result ? "Run again" : "Run reference test"}</span>
+          <button type="button" onClick={runBoAnalysis} disabled={isRunning}>
+            <span>
+              {isRunning
+                ? "Analyzing…"
+                : result
+                  ? "Run again"
+                  : boUsesReference
+                    ? "Run reference test"
+                    : "Analyze selected image"}
+            </span>
             <span aria-hidden="true">→</span>
           </button>
 
           <div
-            className={`statusRow ${result?.disagreementPixels === 0 ? "passed" : ""}`}
+            className={`statusRow ${result && (!result.isReference || result.disagreementPixels === 0) ? "passed" : ""}`}
             role="status"
             aria-live="polite"
           >
@@ -2032,12 +2324,24 @@ export default function Home() {
 
           <dl className="metrics">
             <div>
-              <dt>Mask Dice</dt>
-              <dd>{result ? result.dice.toFixed(6) : "—"}</dd>
+              <dt>{boUsesReference ? "Mask Dice" : "Organoid regions"}</dt>
+              <dd>
+                {result
+                  ? result.dice !== null
+                    ? result.dice.toFixed(6)
+                    : result.morphology.regionCount.toLocaleString()
+                  : "—"}
+              </dd>
             </div>
             <div>
-              <dt>Different pixels</dt>
-              <dd>{result ? result.disagreementPixels.toLocaleString() : "—"}</dd>
+              <dt>{boUsesReference ? "Different pixels" : "Image size"}</dt>
+              <dd>
+                {result
+                  ? result.disagreementPixels !== null
+                    ? result.disagreementPixels.toLocaleString()
+                    : `${result.morphology.originalWidth}×${result.morphology.originalHeight}`
+                  : "—"}
+              </dd>
             </div>
             <div>
               <dt>Model load</dt>
@@ -2050,11 +2354,30 @@ export default function Home() {
           </dl>
 
           {result && (
-            <div className="technicalNote">
-              <span>{result.usedCachedModel ? "Cached model" : "Cold model load"}</span>
-              <span>Max error {result.maxProbabilityError.toExponential(2)}</span>
-              <span>Input error {result.maxInputError.toExponential(1)}</span>
-            </div>
+            <>
+              <div className="technicalNote">
+                <span>{result.usedCachedModel ? "Cached model" : "Cold model load"}</span>
+                {result.maxProbabilityError !== null && (
+                  <span>Max error {result.maxProbabilityError.toExponential(2)}</span>
+                )}
+                {result.maxInputError !== null && (
+                  <span>Input error {result.maxInputError.toExponential(1)}</span>
+                )}
+              </div>
+              <div className="downloadActions">
+                <button type="button" className="downloadButton" onClick={downloadBoMask}>
+                  Download mask PNG
+                </button>
+                <button
+                  type="button"
+                  className="downloadButton"
+                  onClick={downloadBoMeasurements}
+                  disabled={!hasValidPixelSize}
+                >
+                  Download measurements CSV
+                </button>
+              </div>
+            </>
           )}
         </aside>
       </section>
@@ -2095,53 +2418,78 @@ export default function Home() {
             <span className="parameterIndex">01</span>
             <h3>Area</h3>
             <strong>
-              {showMorphology
-                ? `${(selectedBoReference.morphology.areaPixels * pixelSize ** 2).toLocaleString(undefined, { maximumFractionDigits: 2 })} µm²`
+              {showMorphology && primaryBoRegion
+                ? `${(primaryBoRegion.areaPixels * pixelSize ** 2).toLocaleString(undefined, { maximumFractionDigits: 2 })} µm²`
                 : "—"}
             </strong>
-            <small>{result ? `${selectedBoReference.morphology.areaPixels.toLocaleString()} px²` : "Run the analysis"}</small>
+            <small>
+              {primaryBoRegion
+                ? `${primaryBoRegion.areaPixels.toLocaleString()} px²`
+                : result
+                  ? "No region detected"
+                  : "Run the analysis"}
+            </small>
           </article>
 
           <article className="morphologyCard">
             <span className="parameterIndex">02</span>
             <h3>Feret diameter</h3>
             <strong>
-              {showMorphology
-                ? `${(selectedBoReference.morphology.feretPixels * pixelSize).toFixed(2)} µm`
+              {showMorphology && primaryBoRegion
+                ? `${(primaryBoRegion.feretPixels * pixelSize).toFixed(2)} µm`
                 : "—"}
             </strong>
-            <small>{result ? `${selectedBoReference.morphology.feretPixels.toFixed(2)} px` : "Run the analysis"}</small>
+            <small>
+              {primaryBoRegion
+                ? `${primaryBoRegion.feretPixels.toFixed(2)} px`
+                : "Run the analysis"}
+            </small>
           </article>
 
           <article className="morphologyCard">
             <span className="parameterIndex">03</span>
             <h3>Perimeter</h3>
             <strong>
-              {showMorphology
-                ? `${(selectedBoReference.morphology.perimeterPixels * pixelSize).toFixed(2)} µm`
+              {showMorphology && primaryBoRegion
+                ? `${(primaryBoRegion.perimeterPixels * pixelSize).toFixed(2)} µm`
                 : "—"}
             </strong>
-            <small>{result ? `${selectedBoReference.morphology.perimeterPixels.toFixed(2)} px` : "Run the analysis"}</small>
+            <small>
+              {primaryBoRegion
+                ? `${primaryBoRegion.perimeterPixels.toFixed(2)} px`
+                : "Run the analysis"}
+            </small>
           </article>
 
           <article className="morphologyCard">
             <span className="parameterIndex">04</span>
             <h3>Roundness</h3>
-            <strong>{showMorphology ? selectedBoReference.morphology.roundness.toFixed(4) : "—"}</strong>
+            <strong>
+              {showMorphology && primaryBoRegion
+                ? primaryBoRegion.roundness.toFixed(4)
+                : "—"}
+            </strong>
             <small>Unitless shape index</small>
           </article>
 
           <article className="morphologyCard">
             <span className="parameterIndex">05</span>
             <h3>Circularity</h3>
-            <strong>{showMorphology ? selectedBoReference.morphology.circularity.toFixed(4) : "—"}</strong>
+            <strong>
+              {showMorphology && primaryBoRegion
+                ? primaryBoRegion.circularity.toFixed(4)
+                : "—"}
+            </strong>
             <small>Unitless shape index</small>
           </article>
         </div>
 
         <p className="morphologyNote">
-          Current values reproduce the released desktop measurements for the validated
-          reference sample. Live measurements for uploaded images are the next step.
+          {boUsesReference
+            ? "The released sample confirms the browser mask against the desktop output."
+            : result && result.morphology.regionCount > 1
+              ? `The cards show the largest of ${result.morphology.regionCount} connected regions. The CSV includes every detected region.`
+              : "Measurements come from the generated mask at the source image resolution. Confirm the microscope pixel size before using µm-based values."}
         </p>
       </section>
             </>
@@ -2616,27 +2964,38 @@ export default function Home() {
                 )}
 
                 {classificationResult && (
-                  <div className="technicalNote">
-                    <span>
-                      {classificationResult.usedCachedModel
-                        ? "Cached model"
-                        : "Cold model load"}
-                    </span>
-                    <span>
-                      Model load {classificationResult.modelLoadSeconds.toFixed(2)} s
-                    </span>
-                    <span>Inference {classificationResult.inferenceSeconds.toFixed(2)} s</span>
-                    {classificationResult.maxProbabilityError !== null && (
+                  <>
+                    <div className="technicalNote">
                       <span>
-                        Max error {classificationResult.maxProbabilityError.toExponential(2)}
+                        {classificationResult.usedCachedModel
+                          ? "Cached model"
+                          : "Cold model load"}
                       </span>
-                    )}
-                    {classificationResult.maxInputError !== null && (
                       <span>
-                        Input delta {classificationResult.maxInputError.toExponential(2)}
+                        Model load {classificationResult.modelLoadSeconds.toFixed(2)} s
                       </span>
-                    )}
-                  </div>
+                      <span>Inference {classificationResult.inferenceSeconds.toFixed(2)} s</span>
+                      {classificationResult.maxProbabilityError !== null && (
+                        <span>
+                          Max error {classificationResult.maxProbabilityError.toExponential(2)}
+                        </span>
+                      )}
+                      {classificationResult.maxInputError !== null && (
+                        <span>
+                          Input delta {classificationResult.maxInputError.toExponential(2)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="downloadActions">
+                      <button
+                        type="button"
+                        className="downloadButton"
+                        onClick={downloadClassificationResult}
+                      >
+                        Download classification CSV
+                      </button>
+                    </div>
+                  </>
                 )}
               </aside>
             </div>
@@ -2859,7 +3218,7 @@ export default function Home() {
       )}
 
       <footer>
-        <span>Local feasibility prototype</span>
+        <span>Device-local browser analysis</span>
         <span>BO + EB + 2 classifiers + rosette detection · FP32 · ONNX Runtime Web</span>
       </footer>
     </main>

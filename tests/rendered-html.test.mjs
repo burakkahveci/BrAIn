@@ -185,3 +185,18 @@ test("keeps the rosette model and validation references wired into the UI", asyn
     /title:\s*"BrAIn \| AI-Based Morphology Analysis Tool for Organoids"/,
   );
 });
+
+test("supports device-local uploads and downloadable results across every workflow", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /Choose your BO image/);
+  assert.match(page, /selectBoImage/);
+  assert.match(page, /runBoAnalysis/);
+  assert.match(page, /analyzeSegmentationMask/);
+  assert.match(page, /Download mask PNG/);
+  assert.match(page, /Download measurements CSV/);
+  assert.match(page, /Download classification CSV/);
+  assert.match(page, /Download detections CSV/);
+  assert.match(page, /without being uploaded/);
+  assert.doesNotMatch(page, /Live measurements for uploaded images are the next step/);
+});

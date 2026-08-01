@@ -7,6 +7,8 @@ repository contains the browser version of the published desktop tool, with
 classification, segmentation, morphology measurement, and neural-rosette
 detection running locally in the user's browser.
 
+Live application: <https://burakkahveci.github.io/BrAIn/>
+
 ## Available workflows
 
 - Abnormal–Normal organoid classification
@@ -16,6 +18,10 @@ detection running locally in the user's browser.
 - Area, maximum Feret diameter, perimeter, roundness, and circularity outputs
 - Neural-rosette detection with annotated-image and CSV export
 - Selectable reference images for every released workflow
+- User-supplied image analysis for both classifiers, BO/EB segmentation, and
+  neural-rosette detection
+- Downloadable BO/EB masks, morphology tables, classification results, and
+  rosette detections
 
 ## Privacy and intended use
 
