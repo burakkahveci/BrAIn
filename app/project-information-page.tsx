@@ -28,21 +28,21 @@ export function ProjectInformationPage({
           </Link>
           <nav className="siteNav" aria-label="Project information">
             <Link href="/">BrAIn</Link>
-            <a className={activeSection === "about" ? "active" : ""} href="/about">
+            <Link className={activeSection === "about" ? "active" : ""} href="/about">
               About
-            </a>
-            <a className={activeSection === "paper" ? "active" : ""} href="/paper">
+            </Link>
+            <Link className={activeSection === "paper" ? "active" : ""} href="/paper">
               Paper
-            </a>
-            <a
+            </Link>
+            <Link
               className={activeSection === "licensing" ? "active" : ""}
               href="/licensing"
             >
               Licensing
-            </a>
-            <a className={activeSection === "team" ? "active" : ""} href="/team">
+            </Link>
+            <Link className={activeSection === "team" ? "active" : ""} href="/team">
               Team
-            </a>
+            </Link>
           </nav>
         </div>
         <Link className="privacyBadge projectReturn" href="/">

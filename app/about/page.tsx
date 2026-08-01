@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { publicAsset } from "../base-path";
 import { ProjectInformationPage } from "../project-information-page";
 
 export const metadata: Metadata = {
@@ -47,12 +48,15 @@ export default function AboutPage() {
           <article>
             <div className="segmentationPair">
               <figure>
-                <img src="/samples/eb/paper-eb-01.png" alt="Original embryoid body example 1" />
+                <img
+                  src={publicAsset("/samples/eb/paper-eb-01.png")}
+                  alt="Original embryoid body example 1"
+                />
                 <figcaption>Original</figcaption>
               </figure>
               <figure>
                 <img
-                  src="/samples/eb/paper-eb-01.desktop-mask.png"
+                  src={publicAsset("/samples/eb/paper-eb-01.desktop-mask.png")}
                   alt="Segmented embryoid body mask example 1"
                 />
                 <figcaption>Segmented mask</figcaption>
@@ -64,12 +68,15 @@ export default function AboutPage() {
           <article>
             <div className="segmentationPair">
               <figure>
-                <img src="/samples/eb/paper-eb-02.png" alt="Original embryoid body example 2" />
+                <img
+                  src={publicAsset("/samples/eb/paper-eb-02.png")}
+                  alt="Original embryoid body example 2"
+                />
                 <figcaption>Original</figcaption>
               </figure>
               <figure>
                 <img
-                  src="/samples/eb/paper-eb-02.desktop-mask.png"
+                  src={publicAsset("/samples/eb/paper-eb-02.desktop-mask.png")}
                   alt="Segmented embryoid body mask example 2"
                 />
                 <figcaption>Segmented mask</figcaption>
