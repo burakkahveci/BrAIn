@@ -33,6 +33,22 @@ and must not assume that the Zenodo CC BY-SA 4.0 label overrides upstream terms.
 
 ## JavaScript dependencies
 
+### UTIF
+
+- Component: `utif` 3.1.0, used for device-local TIFF decoding
+- Copyright: Photopea / UTIF.js contributors
+- License: MIT
+- Source: <https://github.com/photopea/UTIF.js>
+
+### fflate
+
+- Component: `fflate` 0.8.3, used for device-local ZIP generation
+- Copyright: fflate contributors
+- License: MIT
+- Source: <https://github.com/101arrowz/fflate>
+
+### Other JavaScript dependencies
+
 The application also depends on React, Next.js/vinext, Vite, Drizzle, Tailwind
 CSS, Cloudflare development tooling, and their transitive packages. Each
 package retains its own license. Exact resolved versions are listed in

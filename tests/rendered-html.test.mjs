@@ -200,3 +200,28 @@ test("supports device-local uploads and downloadable results across every workfl
   assert.match(page, /without being uploaded/);
   assert.doesNotMatch(page, /Live measurements for uploaded images are the next step/);
 });
+
+test("supports TIFF, quality review, batch exports and reproducible reports", async () => {
+  const [page, readme, validation, licensing] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../VALIDATION_PROTOCOL.md", import.meta.url), "utf8"),
+    readFile(new URL("../LICENSING_REVIEW_CHECKLIST.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(page, /import \* as UTIF from "utif"/);
+  assert.match(page, /image\/tiff/);
+  assert.match(page, /Multi-page TIFF: page 1/);
+  assert.match(page, /Image quality review/);
+  assert.match(page, /Batch analysis/);
+  assert.match(page, /multiple/);
+  assert.match(page, /Download complete ZIP/);
+  assert.match(page, /Download combined CSV/);
+  assert.match(page, /Download analysis report JSON/);
+  assert.match(page, /application.*version/s);
+  assert.match(readme, /up to 50 images/i);
+  assert.match(validation, /independent multi-laboratory validation is not yet complete/i);
+  assert.match(validation, /Batch processing/);
+  assert.match(licensing, /Ultralytics/);
+  assert.match(licensing, /not legal advice/i);
+});

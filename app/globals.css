@@ -159,8 +159,173 @@ main {
   max-width: 1180px;
   margin: 2rem auto 1.15rem;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
+}
+
+.qualityPanel {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  padding: 0.85rem;
+  border: 1px solid #34363b;
+  border-radius: 0.75rem;
+  background: #0a0b0d;
+  color: #c9cbce;
+}
+
+.qualityPanel.warning {
+  border-color: #7d6840;
+  background: linear-gradient(145deg, rgba(151, 119, 56, 0.12), #0a0b0d 55%);
+}
+
+.qualityPanel.passed {
+  border-color: #56635a;
+}
+
+.qualityPanel > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.qualityPanel strong,
+.qualityPanel span,
+.qualityPanel small,
+.qualityPanel li {
+  font-size: 0.67rem;
+  line-height: 1.45;
+}
+
+.qualityPanel span,
+.qualityPanel small,
+.qualityPanel li {
+  color: #8f9297;
+}
+
+.qualityPanel ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.qualityPanel .qualityNotes li {
+  color: #b8babd;
+}
+
+.batchPanel {
+  max-width: 1180px;
+  margin: 0 auto 1.15rem;
+}
+
+.batchWorkflowGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 1.4rem 0;
+}
+
+.batchWorkflowGrid button {
+  min-height: 5rem;
+  display: grid;
+  gap: 0.4rem;
+  align-content: center;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: #0b0c0e;
+  color: #c8c9cc;
+  text-align: left;
+  box-shadow: none;
+}
+
+.batchWorkflowGrid button.active {
+  border-color: #d6d7d8;
+  background: #e4e4e1;
+  color: #101113;
+}
+
+.batchWorkflowGrid small {
+  color: #777a80;
+  font-size: 0.63rem;
+  line-height: 1.35;
+}
+
+.batchControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.35fr);
+  gap: 0.75rem;
+}
+
+.batchFilePicker,
+.batchRunButton {
+  min-height: 3.5rem;
+}
+
+.batchRunButton {
+  border: 1px solid #e8e8e5;
+  border-radius: 0.65rem;
+  background: #e8e8e5;
+  color: #101113;
+  font-weight: 760;
+}
+
+.batchQueue {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.batchItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: #0b0c0e;
+}
+
+.batchItem.completed { border-color: #4b5c50; }
+.batchItem.failed { border-color: #744b4b; }
+.batchItem.running { border-color: #d0d1d2; }
+
+.batchIndex,
+.batchState {
+  color: #797c81;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.batchItem > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.batchItem strong { font-size: 0.74rem; }
+.batchItem small { color: #92959a; font-size: 0.66rem; }
+.batchItem em { color: #c7a96c; font-size: 0.61rem; font-style: normal; }
+
+.batchDownloads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.batchDownloads p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #7f8287;
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.downloadButton.primary {
+  border-color: #e7e7e4;
+  background: #e7e7e4;
+  color: #111214;
 }
 
 .moduleTab {
@@ -1797,6 +1962,10 @@ footer a {
     grid-template-columns: 1fr;
   }
 
+  .batchWorkflowGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .detectionPreview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1852,6 +2021,21 @@ footer a {
 }
 
 @media (max-width: 680px) {
+  .batchWorkflowGrid,
+  .batchControls,
+  .batchDownloads {
+    grid-template-columns: 1fr;
+  }
+
+  .batchDownloads p {
+    grid-column: auto;
+  }
+
+  .qualityPanel > div {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
   .projectPage {
     padding: 3.4rem 0 2.6rem;
   }

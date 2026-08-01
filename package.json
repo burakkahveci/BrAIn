@@ -1,6 +1,6 @@
 {
   "name": "brain-web",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,17 +10,19 @@
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "build:pages": "GITHUB_PAGES=true NEXT_PUBLIC_BASE_PATH=/BrAIn next build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/batch-tiff-reports.test.mjs tests/test_tiff_and_batch_logic.mjs",
     "test:pages": "npm run build:pages && node --test tests/static-export.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
+    "fflate": "^0.8.3",
     "next": "16.2.6",
     "onnxruntime-web": "^1.23.2",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "utif": "^3.1.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

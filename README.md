@@ -22,6 +22,10 @@ Live application: <https://burakkahveci.github.io/BrAIn/>
   neural-rosette detection
 - Downloadable BO/EB masks, morphology tables, classification results, and
   rosette detections
+- Batch analysis of up to 50 images with a combined CSV and complete ZIP export
+- PNG, JPEG, BMP, WebP and TIFF input (first page for multi-page TIFF)
+- Advisory image-quality warnings for resolution, exposure, contrast and focus
+- Versioned JSON analysis reports containing the model, settings and outputs
 
 ## Privacy and intended use
 
@@ -67,6 +71,10 @@ testing; they do not establish performance on new laboratories, imaging
 systems, organoid protocols, or clinical samples. Users should perform
 application-specific validation before drawing scientific conclusions.
 
+The independent evaluation plan is documented in
+[`VALIDATION_PROTOCOL.md`](VALIDATION_PROTOCOL.md). The protocol is ready, but
+multi-laboratory external validation has not yet been completed.
+
 ## Licensing
 
 This repository contains materials with different license scopes:
@@ -82,6 +90,8 @@ Read [`LICENSE_SCOPE.md`](LICENSE_SCOPE.md) and
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) before reuse or
 redistribution. The Ultralytics YOLO-derived neural-rosette workflow requires
 particular attention to AGPL-3.0 or separate Ultralytics licensing terms.
+Use [`LICENSING_REVIEW_CHECKLIST.md`](LICENSING_REVIEW_CHECKLIST.md) before a
+tagged, institutional, commercial or redistributed release.
 
 ## Contact and permissions
 

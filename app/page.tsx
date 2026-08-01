@@ -3,10 +3,14 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import * as ort from "onnxruntime-web";
+import { strToU8, zipSync } from "fflate";
+import * as UTIF from "utif";
 import { publicAsset } from "./base-path";
 
 const IMAGE_SIZE = 256;
 const CLASSIFICATION_IMAGE_SIZE = 550;
+const APP_VERSION = "1.1.0";
+const IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/bmp,image/tiff,.tif,.tiff";
 
 const BO_REFERENCES = [
   {
@@ -333,7 +337,39 @@ type RosetteResult = {
   minimumMatchedIou: number | null;
 };
 
-type ActiveModule = "classification" | "segmentation" | "rosette";
+type ImageQuality = {
+  width: number;
+  height: number;
+  meanBrightness: number;
+  contrast: number;
+  edgeVariance: number;
+  warnings: string[];
+  notes: string[];
+};
+
+type PreparedImageFile = {
+  image: HTMLImageElement;
+  objectUrl: string;
+  quality: ImageQuality;
+};
+
+type BatchWorkflow = "bo" | "eb" | "abnormal" | "budding" | "rosette";
+type BatchStatus = "queued" | "running" | "completed" | "failed";
+
+type BatchResultItem = {
+  id: string;
+  fileName: string;
+  status: BatchStatus;
+  summary: string;
+  quality: ImageQuality | null;
+  report: Record<string, unknown> | null;
+  csvRow: string | null;
+  outputName: string | null;
+  outputBytes: Uint8Array | null;
+  error: string | null;
+};
+
+type ActiveModule = "classification" | "segmentation" | "rosette" | "batch";
 type ClassificationMode = "abnormal" | "budding";
 type SegmentationMode = "bo" | "eb";
 
@@ -352,6 +388,216 @@ async function loadImage(path: string) {
     image.onerror = () => reject(new Error("Reference image could not be loaded."));
     image.src = path;
   });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type = "image/png") {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("The analysis image could not be exported."));
+    }, type);
+  });
+}
+
+function isTiffFile(file: File) {
+  return (
+    file.type === "image/tiff" ||
+    file.name.toLowerCase().endsWith(".tif") ||
+    file.name.toLowerCase().endsWith(".tiff")
+  );
+}
+
+function assessImageQuality(image: HTMLImageElement, notes: string[] = []): ImageQuality {
+  const sampleSize = 256;
+  const ratio = Math.min(1, sampleSize / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Image quality could not be checked.");
+  context.drawImage(image, 0, 0, width, height);
+  const rgba = context.getImageData(0, 0, width, height).data;
+  const gray = new Float32Array(width * height);
+  let sum = 0;
+  for (let index = 0; index < gray.length; index += 1) {
+    const pixel = index * 4;
+    gray[index] =
+      rgba[pixel] * 0.299 + rgba[pixel + 1] * 0.587 + rgba[pixel + 2] * 0.114;
+    sum += gray[index];
+  }
+  const meanBrightness = sum / gray.length;
+  let squaredDifference = 0;
+  for (const value of gray) squaredDifference += (value - meanBrightness) ** 2;
+  const contrast = Math.sqrt(squaredDifference / gray.length);
+  let laplacianSum = 0;
+  let laplacianSquared = 0;
+  let laplacianCount = 0;
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = y * width + x;
+      const value =
+        gray[index - 1] + gray[index + 1] + gray[index - width] + gray[index + width] -
+        4 * gray[index];
+      laplacianSum += value;
+      laplacianSquared += value ** 2;
+      laplacianCount += 1;
+    }
+  }
+  const laplacianMean = laplacianCount ? laplacianSum / laplacianCount : 0;
+  const edgeVariance = laplacianCount
+    ? Math.max(0, laplacianSquared / laplacianCount - laplacianMean ** 2)
+    : 0;
+  const warnings: string[] = [];
+  if (image.naturalWidth < 256 || image.naturalHeight < 256) {
+    warnings.push("Low resolution: one image dimension is below 256 px.");
+  }
+  if (contrast < 18) warnings.push("Low contrast detected; inspect the segmentation or boxes.");
+  if (meanBrightness < 30) warnings.push("The image may be underexposed.");
+  if (meanBrightness > 225) warnings.push("The image may be overexposed.");
+  if (edgeVariance < 35) warnings.push("Low edge detail detected; check microscope focus.");
+  return {
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    meanBrightness,
+    contrast,
+    edgeVariance,
+    warnings,
+    notes,
+  };
+}
+
+async function prepareImageFile(file: File): Promise<PreparedImageFile> {
+  let objectUrl: string;
+  const notes: string[] = [];
+  if (isTiffFile(file)) {
+    try {
+      const buffer = await file.arrayBuffer();
+      const ifds = UTIF.decode(buffer);
+      if (!ifds || !ifds.length) {
+        throw new Error("The TIFF file does not contain a readable image header.");
+      }
+      UTIF.decodeImage(buffer, ifds[0], ifds);
+      const rgba = UTIF.toRGBA8(ifds[0]);
+      if (!rgba || !ifds[0].width || !ifds[0].height) {
+        throw new Error("The TIFF image color format or dimensions could not be decoded.");
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = ifds[0].width;
+      canvas.height = ifds[0].height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("The TIFF image canvas context is unavailable.");
+      context.putImageData(
+        new ImageData(new Uint8ClampedArray(rgba), ifds[0].width, ifds[0].height),
+        0,
+        0,
+      );
+      objectUrl = URL.createObjectURL(await canvasToBlob(canvas));
+      notes.push("TIFF decoded locally in the browser.");
+      if (ifds.length > 1) notes.push(`Multi-page TIFF: page 1 of ${ifds.length} was analyzed.`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unrecognized or unsupported TIFF encoding.";
+      throw new Error(`TIFF decoding error: ${msg}`);
+    }
+  } else {
+    objectUrl = URL.createObjectURL(file);
+  }
+  try {
+    const image = await loadImage(objectUrl);
+    return { image, objectUrl, quality: assessImageQuality(image, notes) };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
+}
+
+const WORKFLOW_METADATA: Record<BatchWorkflow, Record<string, unknown>> = {
+  bo: {
+    name: "Brain organoid segmentation",
+    model: "bo_fp32.onnx",
+    input: "256 x 256 grayscale",
+    threshold: 0.5,
+  },
+  eb: {
+    name: "Embryoid body segmentation",
+    model: "eb_fp32.onnx",
+    input: "256 x 256 grayscale",
+    threshold: 0.5,
+  },
+  abnormal: {
+    name: "Abnormal-Normal classification",
+    model: "abnormal_normal_fp32.onnx",
+    input: "550 x 550 BGR",
+  },
+  budding: {
+    name: "Budding-Normal classification",
+    model: "budding_normal_fp32.onnx",
+    input: "550 x 550 BGR",
+  },
+  rosette: {
+    name: "Neural-rosette detection",
+    model: "rosette_fp32.onnx",
+    input: "dynamic 704 px, stride 32",
+    confidence_threshold: 0.25,
+    nms_iou: 0.7,
+  },
+};
+
+function makeAnalysisReport(input: {
+  workflow: BatchWorkflow;
+  sourceFile: string;
+  quality: ImageQuality;
+  pixelSize?: number | null;
+  result: Record<string, unknown>;
+}) {
+  return {
+    schema_version: 1,
+    generated_utc: new Date().toISOString(),
+    application: {
+      name: "BrAIn - AI-Based Morphology Analysis Tool for Organoids",
+      version: APP_VERSION,
+      paper_doi: "10.1002/btm2.70123",
+      zenodo_record: "https://zenodo.org/records/15513127",
+    },
+    execution: {
+      location: "browser/device-local",
+      image_uploaded: false,
+      workflow: input.workflow,
+      ...WORKFLOW_METADATA[input.workflow],
+    },
+    source: {
+      file_name: input.sourceFile,
+      width_px: input.quality.width,
+      height_px: input.quality.height,
+      pixel_size_um_per_px: input.pixelSize ?? null,
+    },
+    image_quality: input.quality,
+    result: input.result,
+    interpretation_note:
+      "Automated output requires visual quality control and is intended for research use.",
+  };
+}
+
+function safeFileBase(fileName: string) {
+  return (
+    fileName
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "brain-analysis"
+  );
+}
+
+function uniqueBaseName(fileName: string, index: number, allNames: string[]) {
+  const base = safeFileBase(fileName);
+  const previousCount = allNames
+    .slice(0, index)
+    .filter((name) => safeFileBase(name) === base).length;
+  return previousCount > 0 ? `${base}-${previousCount + 1}` : base;
+}
+
+function csvCell(value: unknown) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
 async function loadJson<T>(path: string): Promise<T> {
@@ -1148,6 +1394,232 @@ function minimumMatchedIou(
   return remaining.length ? 0 : minimum;
 }
 
+function QualityPanel({ quality }: { quality: ImageQuality | null }) {
+  if (!quality) return null;
+  return (
+    <div className={`qualityPanel ${quality.warnings.length ? "warning" : "passed"}`}>
+      <div>
+        <strong>{quality.warnings.length ? "Image quality review" : "Image quality check passed"}</strong>
+        <span>
+          {quality.width} × {quality.height} px · brightness {quality.meanBrightness.toFixed(0)} · contrast {quality.contrast.toFixed(1)}
+        </span>
+      </div>
+      {quality.warnings.length > 0 && (
+        <ul>{quality.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      )}
+      {quality.notes.length > 0 && (
+        <ul className="qualityNotes">{quality.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+      )}
+      <small>Advisory only: always inspect the image and output before interpretation.</small>
+    </div>
+  );
+}
+
+async function buildClassificationInput(image: HTMLImageElement) {
+  const canvas = document.createElement("canvas");
+  canvas.width = CLASSIFICATION_IMAGE_SIZE;
+  canvas.height = CLASSIFICATION_IMAGE_SIZE;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("The classification image could not be prepared.");
+  context.drawImage(image, 0, 0, CLASSIFICATION_IMAGE_SIZE, CLASSIFICATION_IMAGE_SIZE);
+  const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const input = new Float32Array(canvas.width * canvas.height * 3);
+  for (let pixelIndex = 0; pixelIndex < rgba.length / 4; pixelIndex += 1) {
+    const rgbaIndex = pixelIndex * 4;
+    const inputIndex = pixelIndex * 3;
+    input[inputIndex] = rgba[rgbaIndex + 2] / 255;
+    input[inputIndex + 1] = rgba[rgbaIndex + 1] / 255;
+    input[inputIndex + 2] = rgba[rgbaIndex] / 255;
+  }
+  return input;
+}
+
+async function analyzeBatchFile(
+  file: File,
+  workflow: BatchWorkflow,
+  pixelSize: number | null,
+  uniqueBase: string,
+) {
+  const prepared = await prepareImageFile(file);
+  const { image, quality } = prepared;
+  try {
+    if (
+      image.naturalWidth > 8192 ||
+      image.naturalHeight > 8192 ||
+      image.naturalWidth * image.naturalHeight > 25_000_000
+    ) {
+      throw new Error("Image exceeds the 8192 px / 25 megapixel browser safety limit.");
+    }
+
+    if (workflow === "bo" || workflow === "eb") {
+      const inputCanvas = document.createElement("canvas");
+      const outputCanvas = document.createElement("canvas");
+      const input = prepareUserSegmentationInput(image, inputCanvas);
+      const { session } = workflow === "bo" ? await getSession() : await getEbSession();
+      const outputs = await session.run({
+        [session.inputNames[0]]: new ort.Tensor("float32", input, [1, IMAGE_SIZE, IMAGE_SIZE, 1]),
+      });
+      const prediction = outputs[session.outputNames[0]].data as Float32Array;
+      const mask = resizePredictionToMask(prediction, image.naturalWidth, image.naturalHeight);
+      drawBinaryMaskData(outputCanvas, mask, image.naturalWidth, image.naturalHeight);
+      const morphology = analyzeSegmentationMask(mask, image.naturalWidth, image.naturalHeight);
+      const primary = [...morphology.regions].sort((a, b) => b.areaPixels - a.areaPixels)[0] ?? null;
+      const resultData = workflow === "bo"
+        ? {
+            region_count: morphology.regionCount,
+            primary_region: primary,
+            pixel_size_um_per_px: pixelSize,
+          }
+        : {
+            region_count: morphology.regionCount,
+            mean_area_px2: morphology.meanAreaPixels,
+            mean_feret_diameter_px: morphology.meanFeretPixels,
+            pixel_size_um_per_px: pixelSize,
+          };
+      const report = makeAnalysisReport({
+        workflow,
+        sourceFile: file.name,
+        quality,
+        pixelSize,
+        result: resultData,
+      });
+      return {
+        quality,
+        summary:
+          workflow === "bo"
+            ? `${morphology.regionCount} region${morphology.regionCount === 1 ? "" : "s"}; primary area ${primary?.areaPixels ?? 0} px²`
+            : `${morphology.regionCount} regions; mean area ${morphology.meanAreaPixels.toFixed(1)} px²`,
+        report,
+        csvRow: [
+          file.name,
+          workflow,
+          image.naturalWidth,
+          image.naturalHeight,
+          morphology.regionCount,
+          primary?.areaPixels ?? "",
+          morphology.meanAreaPixels,
+          primary?.perimeterPixels ?? "",
+          primary?.feretPixels ?? morphology.meanFeretPixels,
+          primary?.roundness ?? "",
+          primary?.circularity ?? "",
+          "",
+          quality.warnings.length,
+          quality.warnings.join(" | "),
+        ].map(csvCell).join(","),
+        outputName: `${uniqueBase}-${workflow}-mask.png`,
+        outputBytes: new Uint8Array(await (await canvasToBlob(outputCanvas)).arrayBuffer()),
+      };
+    }
+
+    if (workflow === "abnormal" || workflow === "budding") {
+      const mode: ClassificationMode = workflow;
+      const input = await buildClassificationInput(image);
+      const { session } = await getClassificationSession(mode);
+      const outputs = await session.run({
+        [session.inputNames[0]]: new ort.Tensor("float32", input, [
+          1,
+          CLASSIFICATION_IMAGE_SIZE,
+          CLASSIFICATION_IMAGE_SIZE,
+          3,
+        ]),
+      });
+      const prediction = outputs[session.outputNames[0]].data as Float32Array;
+      const predictedIndex = prediction[0] >= prediction[1] ? 0 : 1;
+      const targetLabel = workflow === "abnormal" ? "Abnormal" : "Budding";
+      const predictedLabel = predictedIndex === 0 ? targetLabel : "Normal";
+      const confidence = Math.max(prediction[0], prediction[1]);
+      const report = makeAnalysisReport({
+        workflow,
+        sourceFile: file.name,
+        quality,
+        result: {
+          predicted_class: predictedLabel,
+          target_probability: prediction[0],
+          normal_probability: prediction[1],
+        },
+      });
+      return {
+        quality,
+        summary: `${predictedLabel} · ${(confidence * 100).toFixed(2)}% confidence`,
+        report,
+        csvRow: [
+          file.name,
+          workflow,
+          image.naturalWidth,
+          image.naturalHeight,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          predictedLabel,
+          quality.warnings.length,
+          quality.warnings.join(" | "),
+        ].map(csvCell).join(","),
+        outputName: null,
+        outputBytes: null,
+      };
+    }
+
+    const preprocessCanvas = document.createElement("canvas");
+    const outputCanvas = document.createElement("canvas");
+    const preparedInput = prepareUserRosetteInput(image, preprocessCanvas);
+    const { session } = await getRosetteSession();
+    const outputs = await session.run({
+      [session.inputNames[0]]: new ort.Tensor("float32", preparedInput.input, [
+        1,
+        3,
+        preparedInput.inputHeight,
+        preparedInput.inputWidth,
+      ]),
+    });
+    const output = outputs[session.outputNames[0]];
+    const detections = postprocessRosetteOutput(
+      output.data as Float32Array,
+      output.dims,
+      preparedInput.inputWidth,
+      preparedInput.inputHeight,
+      image.naturalWidth,
+      image.naturalHeight,
+    );
+    drawRosetteDetections(outputCanvas, image, detections);
+    const topConfidence = detections[0]?.confidence ?? 0;
+    const report = makeAnalysisReport({
+      workflow,
+      sourceFile: file.name,
+      quality,
+      result: { detection_count: detections.length, top_confidence: topConfidence, detections },
+    });
+    return {
+      quality,
+      summary: `${detections.length} rosette${detections.length === 1 ? "" : "s"}; top confidence ${(topConfidence * 100).toFixed(1)}%`,
+      report,
+      csvRow: [
+        file.name,
+        workflow,
+        image.naturalWidth,
+        image.naturalHeight,
+        detections.length,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        topConfidence,
+        quality.warnings.length,
+        quality.warnings.join(" | "),
+      ].map(csvCell).join(","),
+      outputName: `${uniqueBase}-rosette-detections.png`,
+      outputBytes: new Uint8Array(await (await canvasToBlob(outputCanvas)).arrayBuffer()),
+    };
+  } finally {
+    URL.revokeObjectURL(prepared.objectUrl);
+  }
+}
+
 export default function Home() {
   const inputCanvasRef = useRef<HTMLCanvasElement>(null);
   const outputCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1170,10 +1642,12 @@ export default function Home() {
   const [boImagePath, setBoImagePath] = useState(BO_REFERENCES[0].imagePath);
   const [boFileName, setBoFileName] = useState<string>(BO_REFERENCES[0].id);
   const [boUsesReference, setBoUsesReference] = useState(true);
+  const [boQuality, setBoQuality] = useState<ImageQuality | null>(null);
   const [ebReferenceId, setEbReferenceId] = useState(EB_REFERENCES[0].id);
   const [ebImagePath, setEbImagePath] = useState(EB_REFERENCES[0].imagePath);
   const [ebFileName, setEbFileName] = useState(EB_REFERENCES[0].displayName);
   const [ebUsesReference, setEbUsesReference] = useState(true);
+  const [ebQuality, setEbQuality] = useState<ImageQuality | null>(null);
   const [ebStatus, setEbStatus] = useState("Ready for the published reference test");
   const [ebIsRunning, setEbIsRunning] = useState(false);
   const [ebResult, setEbResult] = useState<EbAnalysisResult | null>(null);
@@ -1188,6 +1662,7 @@ export default function Home() {
     ABNORMAL_REFERENCES[0].displayName,
   );
   const [classificationUsesReference, setClassificationUsesReference] = useState(true);
+  const [classificationQuality, setClassificationQuality] = useState<ImageQuality | null>(null);
   const [classificationIsRunning, setClassificationIsRunning] = useState(false);
   const [classificationStatus, setClassificationStatus] = useState(
     "Ready for the released reference test",
@@ -1205,12 +1680,18 @@ export default function Home() {
     ROSETTE_REFERENCES[0].displayName,
   );
   const [rosetteUsesReference, setRosetteUsesReference] = useState(true);
+  const [rosetteQuality, setRosetteQuality] = useState<ImageQuality | null>(null);
   const [rosetteStatus, setRosetteStatus] = useState(
     "Ready for the released reference test",
   );
   const [rosetteIsRunning, setRosetteIsRunning] = useState(false);
   const [rosetteResult, setRosetteResult] = useState<RosetteResult | null>(null);
   const [rosetteError, setRosetteError] = useState<string | null>(null);
+  const [batchWorkflow, setBatchWorkflow] = useState<BatchWorkflow>("bo");
+  const [batchFiles, setBatchFiles] = useState<File[]>([]);
+  const [batchItems, setBatchItems] = useState<BatchResultItem[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchStatus, setBatchStatus] = useState("Choose up to 50 images");
 
   const selectedBoReference =
     BO_REFERENCES.find((reference) => reference.id === boReferenceId) ?? BO_REFERENCES[0];
@@ -1391,23 +1872,32 @@ export default function Home() {
     setBoReferenceId(referenceId);
     setBoFileName(reference.id);
     setBoUsesReference(true);
+    setBoQuality(null);
     setResult(null);
     setError(null);
     setStatus("Ready for the selected reference test");
   };
 
-  const selectBoImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectBoImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setBoImagePath((previousPath) => {
-      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
-      return URL.createObjectURL(file);
-    });
-    setBoFileName(file.name);
-    setBoUsesReference(false);
-    setResult(null);
-    setError(null);
-    setStatus("Image ready for local BO analysis");
+    setStatus("Reading image and checking quality…");
+    try {
+      const prepared = await prepareImageFile(file);
+      setBoImagePath((previousPath) => {
+        if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+        return prepared.objectUrl;
+      });
+      setBoFileName(file.name);
+      setBoUsesReference(false);
+      setBoQuality(prepared.quality);
+      setResult(null);
+      setError(null);
+      setStatus("Image ready for local BO analysis");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The image could not be opened.");
+      setStatus("Image could not be prepared");
+    }
   };
 
   const useBoReference = () => selectBoReference(boReferenceId);
@@ -1468,23 +1958,32 @@ export default function Home() {
     setEbReferenceId(referenceId);
     setEbFileName(reference.displayName);
     setEbUsesReference(true);
+    setEbQuality(null);
     setEbResult(null);
     setEbError(null);
     setEbStatus("Ready for the selected published reference test");
   };
 
-  const selectEbImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectEbImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setEbImagePath((previousPath) => {
-      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
-      return URL.createObjectURL(file);
-    });
-    setEbFileName(file.name);
-    setEbUsesReference(false);
-    setEbResult(null);
-    setEbError(null);
-    setEbStatus("Image ready for local EB analysis");
+    setEbStatus("Reading image and checking quality…");
+    try {
+      const prepared = await prepareImageFile(file);
+      setEbImagePath((previousPath) => {
+        if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+        return prepared.objectUrl;
+      });
+      setEbFileName(file.name);
+      setEbUsesReference(false);
+      setEbQuality(prepared.quality);
+      setEbResult(null);
+      setEbError(null);
+      setEbStatus("Image ready for local EB analysis");
+    } catch (caught) {
+      setEbError(caught instanceof Error ? caught.message : "The image could not be opened.");
+      setEbStatus("Image could not be prepared");
+    }
   };
 
   const useEbReference = () => selectEbReference(ebReferenceId);
@@ -1675,21 +2174,28 @@ export default function Home() {
     );
   };
 
-  const selectClassificationImage = (
+  const selectClassificationImage = async (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
-    setClassificationImagePath((previousPath) => {
-      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
-      return URL.createObjectURL(file);
-    });
-    setClassificationFileName(file.name);
-    setClassificationUsesReference(false);
-    setClassificationResult(null);
-    setClassificationError(null);
-    setClassificationStatus("Image ready for local analysis");
+    setClassificationStatus("Reading image and checking quality…");
+    try {
+      const prepared = await prepareImageFile(file);
+      setClassificationImagePath((previousPath) => {
+        if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+        return prepared.objectUrl;
+      });
+      setClassificationFileName(file.name);
+      setClassificationUsesReference(false);
+      setClassificationQuality(prepared.quality);
+      setClassificationResult(null);
+      setClassificationError(null);
+      setClassificationStatus("Image ready for local analysis");
+    } catch (caught) {
+      setClassificationError(caught instanceof Error ? caught.message : "The image could not be opened.");
+      setClassificationStatus("Image could not be prepared");
+    }
   };
 
   const useClassificationReference = () => {
@@ -1699,6 +2205,7 @@ export default function Home() {
     });
     setClassificationFileName(selectedClassificationReference.displayName);
     setClassificationUsesReference(true);
+    setClassificationQuality(null);
     setClassificationResult(null);
     setClassificationError(null);
     setClassificationStatus("Ready for the released reference test");
@@ -1714,6 +2221,7 @@ export default function Home() {
     setClassificationReferenceSlug(reference.slug);
     setClassificationFileName(reference.displayName);
     setClassificationUsesReference(true);
+    setClassificationQuality(null);
     setClassificationResult(null);
     setClassificationError(null);
     setClassificationStatus("Ready for the selected reference test");
@@ -1730,6 +2238,7 @@ export default function Home() {
     setClassificationReferenceSlug(reference.slug);
     setClassificationFileName(reference.displayName);
     setClassificationUsesReference(true);
+    setClassificationQuality(null);
     setClassificationResult(null);
     setClassificationError(null);
     setClassificationStatus("Ready for the released reference test");
@@ -1903,23 +2412,32 @@ export default function Home() {
     setRosetteReferenceId(reference.id);
     setRosetteFileName(reference.displayName);
     setRosetteUsesReference(true);
+    setRosetteQuality(null);
     setRosetteResult(null);
     setRosetteError(null);
     setRosetteStatus("Ready for the selected reference test");
   };
 
-  const selectRosetteImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectRosetteImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setRosetteImagePath((previousPath) => {
-      if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
-      return URL.createObjectURL(file);
-    });
-    setRosetteFileName(file.name);
-    setRosetteUsesReference(false);
-    setRosetteResult(null);
-    setRosetteError(null);
-    setRosetteStatus("Image ready for local rosette detection");
+    setRosetteStatus("Reading image and checking quality…");
+    try {
+      const prepared = await prepareImageFile(file);
+      setRosetteImagePath((previousPath) => {
+        if (previousPath.startsWith("blob:")) URL.revokeObjectURL(previousPath);
+        return prepared.objectUrl;
+      });
+      setRosetteFileName(file.name);
+      setRosetteUsesReference(false);
+      setRosetteQuality(prepared.quality);
+      setRosetteResult(null);
+      setRosetteError(null);
+      setRosetteStatus("Image ready for local rosette detection");
+    } catch (caught) {
+      setRosetteError(caught instanceof Error ? caught.message : "The image could not be opened.");
+      setRosetteStatus("Image could not be prepared");
+    }
   };
 
   const useRosetteReference = () => selectRosetteReference(rosetteReferenceId);
@@ -2106,6 +2624,245 @@ export default function Home() {
     );
   };
 
+  const downloadReport = (report: Record<string, unknown>, fileName: string) => {
+    downloadBlob(
+      new Blob([`${JSON.stringify(report, null, 2)}\n`], { type: "application/json" }),
+      `${fileName}-analysis-report.json`,
+    );
+  };
+
+  const downloadBoReport = async () => {
+    if (!result) return;
+    const quality = boQuality ?? assessImageQuality(await loadImage(boImagePath));
+    downloadReport(
+      makeAnalysisReport({
+        workflow: "bo",
+        sourceFile: boFileName,
+        quality,
+        pixelSize: hasValidPixelSize ? pixelSize : null,
+        result: { morphology: result.morphology, primary_region: primaryBoRegion },
+      }),
+      boDownloadBase,
+    );
+  };
+
+  const downloadEbReport = async () => {
+    if (!ebResult) return;
+    const quality = ebQuality ?? assessImageQuality(await loadImage(ebImagePath));
+    downloadReport(
+      makeAnalysisReport({
+        workflow: "eb",
+        sourceFile: ebFileName,
+        quality,
+        pixelSize: hasValidPixelSize ? pixelSize : null,
+        result: { morphology: ebResult.morphology },
+      }),
+      ebDownloadBase,
+    );
+  };
+
+  const downloadClassificationReport = async () => {
+    if (!classificationResult) return;
+    const quality =
+      classificationQuality ?? assessImageQuality(await loadImage(classificationImagePath));
+    downloadReport(
+      makeAnalysisReport({
+        workflow: classificationMode,
+        sourceFile: classificationFileName,
+        quality,
+        result: {
+          predicted_class: classificationResult.predictedLabel,
+          target_probability: classificationResult.targetProbability,
+          normal_probability: classificationResult.normalProbability,
+        },
+      }),
+      classificationDownloadBase,
+    );
+  };
+
+  const downloadRosetteReport = async () => {
+    if (!rosetteResult) return;
+    const quality = rosetteQuality ?? assessImageQuality(await loadImage(rosetteImagePath));
+    downloadReport(
+      makeAnalysisReport({
+        workflow: "rosette",
+        sourceFile: rosetteFileName,
+        quality,
+        result: {
+          detection_count: rosetteResult.detections.length,
+          detections: rosetteResult.detections,
+        },
+      }),
+      rosetteDownloadBase,
+    );
+  };
+
+  const selectBatchFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []).slice(0, 50);
+    setBatchFiles(files);
+    setBatchItems(
+      files.map((file, index) => ({
+        id: `${file.name}-${file.lastModified}-${index}`,
+        fileName: file.name,
+        status: "queued",
+        summary: "Waiting",
+        quality: null,
+        report: null,
+        csvRow: null,
+        outputName: null,
+        outputBytes: null,
+        error: null,
+      })),
+    );
+    setBatchStatus(
+      files.length ? `${files.length} image${files.length === 1 ? "" : "s"} ready` : "Choose up to 50 images",
+    );
+  };
+
+  const changeBatchWorkflow = (workflow: BatchWorkflow) => {
+    if (batchRunning) return;
+    setBatchWorkflow(workflow);
+    setBatchItems((items) =>
+      items.map((item) => ({ ...item, status: "queued", summary: "Waiting", quality: null, report: null, csvRow: null, outputName: null, outputBytes: null, error: null })),
+    );
+    if (batchFiles.length) setBatchStatus(`${batchFiles.length} images ready for ${workflow.toUpperCase()}`);
+  };
+
+  const runBatchAnalysis = async () => {
+    if (batchRunning || !batchFiles.length) return;
+    setBatchRunning(true);
+    const runningWorkflow = batchWorkflow;
+    const batchPixelSize = hasValidPixelSize ? pixelSize : null;
+    const allFileNames = batchFiles.map((file) => file.name);
+    setBatchItems((items) => items.map((item) => ({ ...item, status: "queued", error: null })));
+    let completed = 0;
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
+      const uniqueBase = uniqueBaseName(file.name, index, allFileNames);
+      setBatchStatus(`Analyzing ${index + 1} of ${batchFiles.length} · ${file.name}`);
+      setBatchItems((items) =>
+        items.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, status: "running", summary: "Analyzing locally…" } : item,
+        ),
+      );
+      try {
+        const analyzed = await analyzeBatchFile(file, runningWorkflow, batchPixelSize, uniqueBase);
+        completed += 1;
+        setBatchItems((items) =>
+          items.map((item, itemIndex) =>
+            itemIndex === index ? { ...item, status: "completed", ...analyzed, error: null } : item,
+          ),
+        );
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "Analysis failed.";
+        const failedReport = {
+          schema_version: 1,
+          generated_utc: new Date().toISOString(),
+          application: {
+            name: "BrAIn - AI-Based Morphology Analysis Tool for Organoids",
+            version: APP_VERSION,
+            paper_doi: "10.1002/btm2.70123",
+            zenodo_record: "https://zenodo.org/records/15513127",
+          },
+          execution: {
+            location: "browser/device-local",
+            image_uploaded: false,
+            workflow: runningWorkflow,
+            ...WORKFLOW_METADATA[runningWorkflow],
+            status: "failed",
+            error: message,
+          },
+          source: {
+            file_name: file.name,
+            width_px: null,
+            height_px: null,
+            pixel_size_um_per_px: batchPixelSize,
+          },
+          image_quality: null,
+          result: null,
+          interpretation_note: "Analysis failed for this image.",
+        };
+        const failedCsvRow = [
+          file.name,
+          runningWorkflow,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          `FAILED: ${message}`,
+          0,
+          "",
+        ]
+          .map(csvCell)
+          .join(",");
+        setBatchItems((items) =>
+          items.map((item, itemIndex) =>
+            itemIndex === index
+              ? {
+                  ...item,
+                  status: "failed",
+                  summary: `Failed: ${message}`,
+                  error: message,
+                  report: failedReport,
+                  csvRow: failedCsvRow,
+                  outputName: null,
+                  outputBytes: null,
+                }
+              : item,
+          ),
+        );
+      }
+    }
+    setBatchRunning(false);
+    setBatchStatus(`${completed} of ${batchFiles.length} analyses completed`);
+  };
+
+  const batchCsv = () => {
+    const header = "source_file,workflow,image_width_px,image_height_px,region_or_detection_count,primary_area_px2,mean_area_px2,primary_perimeter_px,feret_or_confidence,roundness,circularity,predicted_class_or_confidence,quality_warning_count,quality_warnings";
+    return `\ufeff${[header, ...batchItems.flatMap((item) => item.csvRow ? [item.csvRow] : [])].join("\n")}\n`;
+  };
+
+  const downloadBatchCsv = () => {
+    downloadBlob(new Blob([batchCsv()], { type: "text/csv;charset=utf-8" }), `brain-${batchWorkflow}-batch-summary.csv`);
+  };
+
+  const downloadBatchZip = () => {
+    const archive: Record<string, Uint8Array> = {
+      "summary.csv": strToU8(batchCsv()),
+      "README.txt": strToU8(
+        `BrAIn batch analysis
+Application version: ${APP_VERSION}
+Workflow: ${batchWorkflow}
+Images were processed locally in the browser.
+Review quality warnings and outputs before interpretation.
+`,
+      ),
+    };
+    const allNames = batchItems.map((item) => item.fileName);
+    for (let index = 0; index < batchItems.length; index += 1) {
+      const item = batchItems[index];
+      if (!item.report) continue;
+      const uniqueBase = uniqueBaseName(item.fileName, index, allNames);
+      archive[`reports/${uniqueBase}-analysis-report.json`] = strToU8(
+        `${JSON.stringify(item.report, null, 2)}
+`,
+      );
+      if (item.outputName && item.outputBytes) {
+        archive[`outputs/${item.outputName}`] = item.outputBytes;
+      }
+    }
+    const zipped = zipSync(archive, { level: 6 });
+    downloadBlob(
+      new Blob([zipped as BlobPart], { type: "application/zip" }),
+      `brain-${batchWorkflow}-batch-results.zip`,
+    );
+  };
+
   return (
     <main>
       <header className="topbar" id="top">
@@ -2166,6 +2923,20 @@ export default function Home() {
             <small>Locate neural rosettes</small>
           </span>
           <span className="moduleState">Live</span>
+        </button>
+
+        <button
+          type="button"
+          className={`moduleTab ${activeModule === "batch" ? "active" : ""}`}
+          aria-pressed={activeModule === "batch"}
+          onClick={() => setActiveModule("batch")}
+        >
+          <span className="moduleNumber">04</span>
+          <span className="moduleTabCopy">
+            <strong>Batch analysis</strong>
+            <small>Multiple images, CSV and ZIP</small>
+          </span>
+          <span className="moduleState live">Live</span>
         </button>
       </nav>
 
@@ -2275,7 +3046,7 @@ export default function Home() {
             <label className="filePicker">
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept={IMAGE_ACCEPT}
                 onChange={selectBoImage}
               />
               <span>Choose your BO image</span>
@@ -2286,6 +3057,7 @@ export default function Home() {
               </button>
             )}
           </div>
+          <QualityPanel quality={boQuality} />
         </article>
 
         <aside className="controlCard">
@@ -2375,6 +3147,9 @@ export default function Home() {
                   disabled={!hasValidPixelSize}
                 >
                   Download measurements CSV
+                </button>
+                <button type="button" className="downloadButton" onClick={downloadBoReport}>
+                  Download analysis report JSON
                 </button>
               </div>
             </>
@@ -2572,7 +3347,7 @@ export default function Home() {
                     <label className="filePicker">
                       <input
                         type="file"
-                        accept="image/png,image/jpeg,image/bmp"
+                        accept={IMAGE_ACCEPT}
                         onChange={selectEbImage}
                       />
                       <span>Choose your EB image</span>
@@ -2587,6 +3362,7 @@ export default function Home() {
                       </button>
                     )}
                   </div>
+                  <QualityPanel quality={ebQuality} />
                 </article>
 
                 <aside className="controlCard">
@@ -2683,6 +3459,9 @@ export default function Home() {
                         disabled={!hasValidPixelSize}
                       >
                         Download measurements CSV
+                      </button>
+                      <button type="button" className="downloadButton" onClick={downloadEbReport}>
+                        Download analysis report JSON
                       </button>
                     </div>
                   )}
@@ -2870,7 +3649,7 @@ export default function Home() {
                   <label className="filePicker">
                     <input
                       type="file"
-                      accept="image/png,image/jpeg,image/bmp"
+                      accept={IMAGE_ACCEPT}
                       onChange={selectClassificationImage}
                     />
                     <span>Choose your image</span>
@@ -2885,6 +3664,7 @@ export default function Home() {
                     </button>
                   )}
                 </div>
+                <QualityPanel quality={classificationQuality} />
               </article>
 
               <aside className="classificationControlCard">
@@ -2994,6 +3774,9 @@ export default function Home() {
                       >
                         Download classification CSV
                       </button>
+                      <button type="button" className="downloadButton" onClick={downloadClassificationReport}>
+                        Download analysis report JSON
+                      </button>
                     </div>
                   </>
                 )}
@@ -3088,7 +3871,7 @@ export default function Home() {
                 <label className="filePicker">
                   <input
                     type="file"
-                    accept="image/png,image/jpeg,image/bmp"
+                    accept={IMAGE_ACCEPT}
                     onChange={selectRosetteImage}
                   />
                   <span>Choose your rosette image</span>
@@ -3099,6 +3882,7 @@ export default function Home() {
                   </button>
                 )}
               </div>
+              <QualityPanel quality={rosetteQuality} />
             </article>
 
             <aside className="controlCard rosetteControlCard">
@@ -3176,6 +3960,9 @@ export default function Home() {
                   <button type="button" className="downloadButton" onClick={downloadRosetteDetections}>
                     Download detections CSV
                   </button>
+                  <button type="button" className="downloadButton" onClick={downloadRosetteReport}>
+                    Download analysis report JSON
+                  </button>
                 </div>
               )}
             </aside>
@@ -3213,6 +4000,112 @@ export default function Home() {
             Public open-source release must preserve the Zenodo CC BY-SA 4.0 attribution
             and satisfy the Ultralytics AGPL-3.0 source-sharing requirements. This is an
             implementation boundary, not legal advice.
+          </p>
+        </section>
+      )}
+
+      {activeModule === "batch" && (
+        <section className="futureModulePanel batchPanel" aria-labelledby="batch-heading">
+          <div className="futureModuleHeader">
+            <div>
+              <p className="cardKicker">High-throughput local workflow</p>
+              <h2 id="batch-heading">Analyze multiple images in one run</h2>
+              <p className="sectionCopy">
+                Select up to 50 PNG, JPEG, BMP, WebP or TIFF images. BrAIn processes
+                them sequentially on this device and creates a combined CSV, individual
+                reproducibility reports and, where applicable, output PNGs in one ZIP.
+              </p>
+            </div>
+            <span className="readinessBadge ready">No upload · v{APP_VERSION}</span>
+          </div>
+
+          <div className="batchWorkflowGrid" role="group" aria-label="Batch workflow">
+            {(
+              [
+                ["bo", "Brain organoid", "Segmentation + morphology"],
+                ["eb", "Embryoid body", "Segmentation + mean morphology"],
+                ["abnormal", "Abnormal–Normal", "Classification"],
+                ["budding", "Budding–Normal", "Classification"],
+                ["rosette", "Neural rosettes", "Detection + annotated image"],
+              ] as const
+            ).map(([workflow, label, detail]) => (
+              <button
+                type="button"
+                key={workflow}
+                className={batchWorkflow === workflow ? "active" : ""}
+                aria-pressed={batchWorkflow === workflow}
+                onClick={() => changeBatchWorkflow(workflow)}
+                disabled={batchRunning}
+              >
+                <strong>{label}</strong>
+                <small>{detail}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="batchControls">
+            <label className="filePicker batchFilePicker">
+              <input
+                type="file"
+                accept={IMAGE_ACCEPT}
+                multiple
+                onChange={selectBatchFiles}
+                disabled={batchRunning}
+              />
+              <span>{batchFiles.length ? "Replace selected images" : "Choose multiple images"}</span>
+            </label>
+            <button
+              type="button"
+              className="batchRunButton"
+              onClick={runBatchAnalysis}
+              disabled={batchRunning || !batchFiles.length}
+            >
+              {batchRunning ? "Analyzing…" : "Run batch analysis"}
+            </button>
+          </div>
+
+          <div className={`statusRow ${batchItems.some((item) => item.status === "completed") && !batchRunning ? "passed" : ""}`} role="status" aria-live="polite">
+            <span className="statusDot" aria-hidden="true" />
+            <span>{batchStatus}</span>
+          </div>
+
+          {batchItems.length > 0 && (
+            <div className="batchQueue" aria-label="Batch analysis queue">
+              {batchItems.map((item, index) => (
+                <article key={item.id} className={`batchItem ${item.status}`}>
+                  <span className="batchIndex">{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <strong>{item.fileName}</strong>
+                    <small>{item.error ?? item.summary}</small>
+                    {item.quality && item.quality.warnings.length > 0 && (
+                      <em>{item.quality.warnings.length} quality warning{item.quality.warnings.length === 1 ? "" : "s"}</em>
+                    )}
+                  </div>
+                  <span className="batchState">{item.status}</span>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {batchItems.some((item) => item.status === "completed") && !batchRunning && (
+            <div className="batchDownloads">
+              <button type="button" className="downloadButton" onClick={downloadBatchCsv}>
+                Download combined CSV
+              </button>
+              <button type="button" className="downloadButton primary" onClick={downloadBatchZip}>
+                Download complete ZIP
+              </button>
+              <p>
+                ZIP includes the combined table, one versioned JSON report per image,
+                and masks or annotated images for workflows that generate them.
+              </p>
+            </div>
+          )}
+
+          <p className="morphologyNote">
+            TIFF files are decoded locally; for multi-page TIFFs, only the first page is
+            analyzed and this is recorded in the JSON report. Quality warnings are
+            advisory and never replace visual inspection.
           </p>
         </section>
       )}
