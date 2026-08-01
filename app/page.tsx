@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import * as ort from "onnxruntime-web";
+import { publicAsset } from "./base-path";
 
 const IMAGE_SIZE = 256;
 const CLASSIFICATION_IMAGE_SIZE = 550;
@@ -10,9 +11,9 @@ const CLASSIFICATION_IMAGE_SIZE = 550;
 const BO_REFERENCES = [
   {
     id: "c12_10_18",
-    imagePath: "/samples/bo/c12_10_18.png",
-    expectedInputPath: "/samples/bo/c12_10_18.input.float32.bin",
-    expectedOutputPath: "/samples/bo/c12_10_18.expected.float32.bin",
+    imagePath: publicAsset("/samples/bo/c12_10_18.png"),
+    expectedInputPath: publicAsset("/samples/bo/c12_10_18.input.float32.bin"),
+    expectedOutputPath: publicAsset("/samples/bo/c12_10_18.expected.float32.bin"),
     morphology: {
       areaPixels: 19110,
       perimeterPixels: 545.7422074112307,
@@ -23,9 +24,9 @@ const BO_REFERENCES = [
   },
   {
     id: "c8_8_16",
-    imagePath: "/samples/bo/c8_8_16.png",
-    expectedInputPath: "/samples/bo/c8_8_16.input.float32.bin",
-    expectedOutputPath: "/samples/bo/c8_8_16.expected.float32.bin",
+    imagePath: publicAsset("/samples/bo/c8_8_16.png"),
+    expectedInputPath: publicAsset("/samples/bo/c8_8_16.input.float32.bin"),
+    expectedOutputPath: publicAsset("/samples/bo/c8_8_16.expected.float32.bin"),
     morphology: {
       areaPixels: 11217,
       perimeterPixels: 416.81832585697947,
@@ -36,9 +37,9 @@ const BO_REFERENCES = [
   },
   {
     id: "d2_14_22",
-    imagePath: "/samples/bo/d2_14_22.png",
-    expectedInputPath: "/samples/bo/d2_14_22.input.float32.bin",
-    expectedOutputPath: "/samples/bo/d2_14_22.expected.float32.bin",
+    imagePath: publicAsset("/samples/bo/d2_14_22.png"),
+    expectedInputPath: publicAsset("/samples/bo/d2_14_22.input.float32.bin"),
+    expectedOutputPath: publicAsset("/samples/bo/d2_14_22.expected.float32.bin"),
     morphology: {
       areaPixels: 24722,
       perimeterPixels: 621.5706345359768,
@@ -49,9 +50,9 @@ const BO_REFERENCES = [
   },
   {
     id: "d7_16_14",
-    imagePath: "/samples/bo/d7_16_14.png",
-    expectedInputPath: "/samples/bo/d7_16_14.input.float32.bin",
-    expectedOutputPath: "/samples/bo/d7_16_14.expected.float32.bin",
+    imagePath: publicAsset("/samples/bo/d7_16_14.png"),
+    expectedInputPath: publicAsset("/samples/bo/d7_16_14.input.float32.bin"),
+    expectedOutputPath: publicAsset("/samples/bo/d7_16_14.expected.float32.bin"),
     morphology: {
       areaPixels: 8554,
       perimeterPixels: 371.46298679765215,
@@ -62,9 +63,9 @@ const BO_REFERENCES = [
   },
   {
     id: "d9_11_16",
-    imagePath: "/samples/bo/d9_11_16.png",
-    expectedInputPath: "/samples/bo/d9_11_16.input.float32.bin",
-    expectedOutputPath: "/samples/bo/d9_11_16.expected.float32.bin",
+    imagePath: publicAsset("/samples/bo/d9_11_16.png"),
+    expectedInputPath: publicAsset("/samples/bo/d9_11_16.input.float32.bin"),
+    expectedOutputPath: publicAsset("/samples/bo/d9_11_16.expected.float32.bin"),
     morphology: {
       areaPixels: 10357,
       perimeterPixels: 392.2325394193526,
@@ -99,11 +100,11 @@ const EB_REFERENCES = [
   },
 ].map((reference) => ({
   ...reference,
-  imagePath: `/samples/eb/${reference.id}.png`,
-  thumbnailPath: `/samples/eb/${reference.id}.thumb.jpg`,
-  analysisInputPath: `/samples/eb/${reference.id}.analysis-input.png`,
-  expectedInputPath: `/samples/eb/${reference.id}.input.float32.bin`,
-  expectedOutputPath: `/samples/eb/${reference.id}.expected.float32.bin`,
+  imagePath: publicAsset(`/samples/eb/${reference.id}.png`),
+  thumbnailPath: publicAsset(`/samples/eb/${reference.id}.thumb.jpg`),
+  analysisInputPath: publicAsset(`/samples/eb/${reference.id}.analysis-input.png`),
+  expectedInputPath: publicAsset(`/samples/eb/${reference.id}.input.float32.bin`),
+  expectedOutputPath: publicAsset(`/samples/eb/${reference.id}.expected.float32.bin`),
 }));
 
 const ABNORMAL_REFERENCES = [
@@ -139,10 +140,10 @@ const ABNORMAL_REFERENCES = [
   },
 ].map((reference) => ({
   ...reference,
-  imagePath: `/samples/classification/${reference.slug}.jpg`,
-  thumbnailPath: `/samples/classification/${reference.slug}.thumb.jpg`,
-  expectedInputPath: `/samples/classification/${reference.slug}.input.float32.bin`,
-  expectedOutputPath: `/samples/classification/${reference.slug}.expected.float32.bin`,
+  imagePath: publicAsset(`/samples/classification/${reference.slug}.jpg`),
+  thumbnailPath: publicAsset(`/samples/classification/${reference.slug}.thumb.jpg`),
+  expectedInputPath: publicAsset(`/samples/classification/${reference.slug}.input.float32.bin`),
+  expectedOutputPath: publicAsset(`/samples/classification/${reference.slug}.expected.float32.bin`),
 }));
 
 const BUDDING_REFERENCES = [
@@ -178,10 +179,10 @@ const BUDDING_REFERENCES = [
   },
 ].map((reference) => ({
   ...reference,
-  imagePath: `/samples/budding-classification/${reference.slug}.jpg`,
-  thumbnailPath: `/samples/budding-classification/${reference.slug}.thumb.jpg`,
-  expectedInputPath: `/samples/budding-classification/${reference.slug}.input.float32.bin`,
-  expectedOutputPath: `/samples/budding-classification/${reference.slug}.expected.float32.bin`,
+  imagePath: publicAsset(`/samples/budding-classification/${reference.slug}.jpg`),
+  thumbnailPath: publicAsset(`/samples/budding-classification/${reference.slug}.thumb.jpg`),
+  expectedInputPath: publicAsset(`/samples/budding-classification/${reference.slug}.input.float32.bin`),
+  expectedOutputPath: publicAsset(`/samples/budding-classification/${reference.slug}.expected.float32.bin`),
 }));
 
 const ROSETTE_REFERENCES = [
@@ -211,12 +212,12 @@ const ROSETTE_REFERENCES = [
   },
 ].map((reference) => ({
   ...reference,
-  imagePath: `/samples/rosette/${reference.id}.jpg`,
-  thumbnailPath: `/samples/rosette/${reference.id}.thumb.jpg`,
-  analysisInputPath: `/samples/rosette/${reference.id}.analysis-input.png`,
-  expectedInputPath: `/samples/rosette/${reference.id}.input.float32.bin`,
-  expectedOutputPath: `/samples/rosette/${reference.id}.expected.float32.bin`,
-  expectedDetectionsPath: `/samples/rosette/${reference.id}.expected.json`,
+  imagePath: publicAsset(`/samples/rosette/${reference.id}.jpg`),
+  thumbnailPath: publicAsset(`/samples/rosette/${reference.id}.thumb.jpg`),
+  analysisInputPath: publicAsset(`/samples/rosette/${reference.id}.analysis-input.png`),
+  expectedInputPath: publicAsset(`/samples/rosette/${reference.id}.input.float32.bin`),
+  expectedOutputPath: publicAsset(`/samples/rosette/${reference.id}.expected.float32.bin`),
+  expectedDetectionsPath: publicAsset(`/samples/rosette/${reference.id}.expected.json`),
 }));
 
 type ClassificationReference = (typeof ABNORMAL_REFERENCES)[number];
@@ -363,22 +364,22 @@ async function getSession() {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = {
-    mjs: `${window.location.origin}/ort/ort-wasm-simd-threaded.mjs`,
-    wasm: `${window.location.origin}/ort/ort-wasm-simd-threaded.wasm`,
+    mjs: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.mjs")}`,
+    wasm: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.wasm")}`,
   };
 
   const started = performance.now();
-  cachedSession = await ort.InferenceSession.create("/models/bo_fp32.onnx", {
+  cachedSession = await ort.InferenceSession.create(publicAsset("/models/bo_fp32.onnx"), {
     executionProviders: ["wasm"],
     graphOptimizationLevel: "all",
     externalData: [
       {
         path: "bo_fp32.weights-0.bin",
-        data: "/models/bo_fp32.weights-0.bin",
+        data: publicAsset("/models/bo_fp32.weights-0.bin"),
       },
       {
         path: "bo_fp32.weights-1.bin",
-        data: "/models/bo_fp32.weights-1.bin",
+        data: publicAsset("/models/bo_fp32.weights-1.bin"),
       },
     ],
   });
@@ -394,22 +395,22 @@ async function getEbSession() {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = {
-    mjs: `${window.location.origin}/ort/ort-wasm-simd-threaded.mjs`,
-    wasm: `${window.location.origin}/ort/ort-wasm-simd-threaded.wasm`,
+    mjs: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.mjs")}`,
+    wasm: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.wasm")}`,
   };
 
   const started = performance.now();
-  cachedEbSession = await ort.InferenceSession.create("/models/eb_fp32.onnx", {
+  cachedEbSession = await ort.InferenceSession.create(publicAsset("/models/eb_fp32.onnx"), {
     executionProviders: ["wasm"],
     graphOptimizationLevel: "all",
     externalData: [
       {
         path: "eb_fp32.weights-0.bin",
-        data: "/models/eb_fp32.weights-0.bin",
+        data: publicAsset("/models/eb_fp32.weights-0.bin"),
       },
       {
         path: "eb_fp32.weights-1.bin",
-        data: "/models/eb_fp32.weights-1.bin",
+        data: publicAsset("/models/eb_fp32.weights-1.bin"),
       },
     ],
   });
@@ -437,15 +438,15 @@ async function getClassificationSession(mode: ClassificationMode) {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = {
-    mjs: `${window.location.origin}/ort/ort-wasm-simd-threaded.mjs`,
-    wasm: `${window.location.origin}/ort/ort-wasm-simd-threaded.wasm`,
+    mjs: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.mjs")}`,
+    wasm: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.wasm")}`,
   };
 
   const started = performance.now();
   const session = await ort.InferenceSession.create(
     mode === "abnormal"
-      ? "/models/abnormal_normal_fp32.onnx"
-      : "/models/budding_normal_fp32.onnx",
+      ? publicAsset("/models/abnormal_normal_fp32.onnx")
+      : publicAsset("/models/budding_normal_fp32.onnx"),
     {
       executionProviders: ["wasm"],
       graphOptimizationLevel: "all",
@@ -470,25 +471,28 @@ async function getRosetteSession() {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = {
-    mjs: `${window.location.origin}/ort/ort-wasm-simd-threaded.mjs`,
-    wasm: `${window.location.origin}/ort/ort-wasm-simd-threaded.wasm`,
+    mjs: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.mjs")}`,
+    wasm: `${window.location.origin}${publicAsset("/ort/ort-wasm-simd-threaded.wasm")}`,
   };
 
   const started = performance.now();
-  cachedRosetteSession = await ort.InferenceSession.create("/models/rosette_fp32.onnx", {
-    executionProviders: ["wasm"],
-    graphOptimizationLevel: "all",
-    externalData: [
-      {
-        path: "rosette_fp32.weights-0.bin",
-        data: "/models/rosette_fp32.weights-0.bin",
-      },
-      {
-        path: "rosette_fp32.weights-1.bin",
-        data: "/models/rosette_fp32.weights-1.bin",
-      },
-    ],
-  });
+  cachedRosetteSession = await ort.InferenceSession.create(
+    publicAsset("/models/rosette_fp32.onnx"),
+    {
+      executionProviders: ["wasm"],
+      graphOptimizationLevel: "all",
+      externalData: [
+        {
+          path: "rosette_fp32.weights-0.bin",
+          data: publicAsset("/models/rosette_fp32.weights-0.bin"),
+        },
+        {
+          path: "rosette_fp32.weights-1.bin",
+          data: publicAsset("/models/rosette_fp32.weights-1.bin"),
+        },
+      ],
+    },
+  );
   cachedRosetteLoadMilliseconds = performance.now() - started;
   return { session: cachedRosetteSession, usedCachedModel: false };
 }
@@ -1057,7 +1061,8 @@ export default function Home() {
   const [classificationMode, setClassificationMode] =
     useState<ClassificationMode>("abnormal");
   const [segmentationMode, setSegmentationMode] = useState<SegmentationMode>("bo");
-  const [boReferenceId, setBoReferenceId] = useState(BO_REFERENCES[0].id);
+  const [boReferenceId, setBoReferenceId] =
+    useState<(typeof BO_REFERENCES)[number]["id"]>(BO_REFERENCES[0].id);
   const [ebReferenceId, setEbReferenceId] = useState(EB_REFERENCES[0].id);
   const [ebImagePath, setEbImagePath] = useState(EB_REFERENCES[0].imagePath);
   const [ebFileName, setEbFileName] = useState(EB_REFERENCES[0].displayName);
@@ -1855,10 +1860,10 @@ export default function Home() {
           </Link>
           <nav className="siteNav" aria-label="Project information">
             <Link className="active" href="/">BrAIn</Link>
-            <a href="/about">About</a>
-            <a href="/paper">Paper</a>
-            <a href="/licensing">Licensing</a>
-            <a href="/team">Team</a>
+            <Link href="/about">About</Link>
+            <Link href="/paper">Paper</Link>
+            <Link href="/licensing">Licensing</Link>
+            <Link href="/team">Team</Link>
           </nav>
         </div>
         <span className="privacyBadge">Images stay on this device</span>

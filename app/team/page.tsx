@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { publicAsset } from "../base-path";
 import { ProjectInformationPage } from "../project-information-page";
 
 export const metadata: Metadata = {
@@ -16,24 +17,24 @@ type TeamMember = {
 const researchers: TeamMember[] = [
   {
     name: "Burak Kahveci",
-    image: "/team/burak-kahveci.jpeg",
+    image: publicAsset("/team/burak-kahveci.jpeg"),
     linkedin: "https://www.linkedin.com/in/kahveciburak",
   },
   {
     name: "Elifsu Polatlı",
-    image: "/team/elifsu-polatli.jpg",
+    image: publicAsset("/team/elifsu-polatli.jpg"),
     linkedin:
       "https://www.linkedin.com/search/results/people/?keywords=Elifsu%20Polatl%C4%B1",
     linkLabel: "Find on LinkedIn",
   },
   {
     name: "Ali Eren Evranos",
-    image: "/team/ali-eren-evranos.jpeg",
+    image: publicAsset("/team/ali-eren-evranos.jpeg"),
     linkedin: "https://www.linkedin.com/in/ali-eren-evranos",
   },
   {
     name: "Hüseyin Güner",
-    image: "/team/huseyin-guner.jpeg",
+    image: publicAsset("/team/huseyin-guner.jpeg"),
     linkedin: "https://www.linkedin.com/in/huseyin-guner-b4a36b8",
   },
 ];
@@ -41,17 +42,17 @@ const researchers: TeamMember[] = [
 const supervisors: TeamMember[] = [
   {
     name: "Sinan Güven",
-    image: "/team/sinan-guven.jpeg",
+    image: publicAsset("/team/sinan-guven.jpeg"),
     linkedin: "https://www.linkedin.com/in/sinan-g%C3%BCven-a458734",
   },
   {
     name: "Yalın Baştanlar",
-    image: "/team/yalin-bastanlar.jpeg",
+    image: publicAsset("/team/yalin-bastanlar.jpeg"),
     linkedin: "https://www.linkedin.com/in/yalin-bastanlar-51472a96",
   },
   {
     name: "Gökhan Karakülah",
-    image: "/team/gokhan-karakulah.jpeg",
+    image: publicAsset("/team/gokhan-karakulah.jpeg"),
     linkedin:
       "https://www.linkedin.com/in/g%C3%B6khan-karak%C3%BClah-b650b0229",
   },
