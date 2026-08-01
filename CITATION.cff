@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+message: "If you use BrAIn, please cite both the peer-reviewed paper and the Zenodo release."
+title: "BrAIn: A comprehensive artificial intelligence-based morphology analysis system for brain organoids and neuroscience"
+type: software
+authors:
+  - family-names: Kahveci
+    given-names: Burak
+    orcid: "https://orcid.org/0000-0001-7041-0986"
+doi: "10.5281/zenodo.15513127"
+license: AGPL-3.0-only
+keywords:
+  - brain organoid
+  - embryoid body
+  - morphology analysis
+  - segmentation
+  - neural rosette
+  - artificial intelligence
+preferred-citation:
+  type: article
+  title: "BrAIn: A comprehensive artificial intelligence-based morphology analysis system for brain organoids and neuroscience"
+  authors:
+    - family-names: Kahveci
+      given-names: Burak
+    - family-names: Polatlı
+      given-names: Elifsu
+    - family-names: Evranos
+      given-names: Ali Eren
+    - family-names: Güner
+      given-names: Hüseyin
+    - family-names: Karakülah
+      given-names: Gökhan
+    - family-names: Baştanlar
+      given-names: Yalın
+    - family-names: Güven
+      given-names: Sinan
+  journal: "Bioengineering & Translational Medicine"
+  year: 2026
+  volume: 11
+  doi: "10.1002/btm2.70123"

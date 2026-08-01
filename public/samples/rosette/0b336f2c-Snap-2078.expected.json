@@ -1,0 +1,19 @@
+{
+  "file": "0b336f2c-Snap-2078.jpg",
+  "display_name": "Snap-2078",
+  "original_width": 2464,
+  "original_height": 2056,
+  "input_width": 704,
+  "input_height": 608,
+  "ground_truth_count": 1,
+  "detections": [
+    {
+      "x1": 597.9293823242188,
+      "y1": 475.48876953125,
+      "x2": 1179.781982421875,
+      "y2": 982.3191528320312,
+      "confidence": 0.8946669697761536,
+      "class_id": 0
+    }
+  ]
+}
